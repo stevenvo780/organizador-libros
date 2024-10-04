@@ -7,22 +7,36 @@ import docx
 from transformers import pipeline
 import warnings
 from tqdm import tqdm
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from huggingface_hub import login
+import torch
+import multiprocessing
+import gc
+import time
 
 # Autenticación en Hugging Face
 login(token="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")
+
+# Configuración de dispositivos para PyTorch
+device = "cuda" if torch.cuda.is_available() else "cpu"
+
+# Ajustes para maximizar el uso de GPU con una RTX 2060 y un i5 10400
+torch.backends.cudnn.benchmark = True  # Activar benchmark de CuDNN para mejorar el rendimiento en operaciones repetitivas
+torch.set_num_threads(6)  # Ajustar el número de hilos a 6 para un mejor uso de la CPU de 6 núcleos
 
 # Cargar el modelo de QA una vez
 qa_pipeline = pipeline(
     "question-answering",
     model="mrm8488/bert-base-spanish-wwm-cased-finetuned-spa-squad2-es",
     tokenizer="mrm8488/bert-base-spanish-wwm-cased-finetuned-spa-squad2-es",
-    device=0
+    device=0 if device == "cuda" else -1
 )
 
 MAX_LENGTH = 1000  # Límite de caracteres para el contexto
+MAX_WORKERS = 164  # Límite de hilos para el ThreadPoolExecutor
 
+# Cambiar el método de inicio de los procesos a 'spawn' para evitar errores con CUDA
+multiprocessing.set_start_method("spawn", force=True)
 
 def process_text_with_ai(text, qa_pipeline):
     try:
@@ -32,6 +46,11 @@ def process_text_with_ai(text, qa_pipeline):
     except Exception as e:
         print(f"Error al procesar texto con AI: {e}")
         return None
+    finally:
+        # Liberar memoria de GPU
+        torch.cuda.empty_cache()
+        gc.collect()
+        time.sleep(1)  # Esperar un segundo para permitir la liberación de memoria
 
 
 def process_pdf(ruta_archivo, qa_pipeline):
@@ -80,8 +99,7 @@ def process_docx(ruta_archivo, qa_pipeline):
     return process_text_with_ai(texto, qa_pipeline)
 
 
-def process_file(args):
-    ruta_archivo, carpeta_salida, qa_pipeline = args
+def process_file(ruta_archivo, carpeta_salida, qa_pipeline):
     archivos_error = []
     archivos_no_soportados = []
     nombre_archivo = os.path.basename(ruta_archivo)
@@ -130,18 +148,12 @@ def main():
             if os.path.isfile(ruta_archivo):
                 archivos_para_procesar.append(ruta_archivo)
 
-    args_list = [(ruta_archivo, carpeta_salida, qa_pipeline) for ruta_archivo in archivos_para_procesar]
-
-    with ThreadPoolExecutor() as executor:
-        resultados = list(tqdm(
-            executor.map(process_file, args_list),
-            total=len(archivos_para_procesar),
-            desc="Procesando archivos"
-        ))
-
-    for errores, no_soportados in resultados:
-        archivos_error.extend(errores)
-        archivos_no_soportados.extend(no_soportados)
+    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+        futures = {executor.submit(process_file, ruta_archivo, carpeta_salida, qa_pipeline): ruta_archivo for ruta_archivo in archivos_para_procesar}
+        for future in tqdm(as_completed(futures), total=len(futures), desc="Procesando archivos"):
+            errores, no_soportados = future.result()
+            archivos_error.extend(errores)
+            archivos_no_soportados.extend(no_soportados)
 
     if archivos_error:
         print("Ocurrieron errores con los siguientes archivos:")
