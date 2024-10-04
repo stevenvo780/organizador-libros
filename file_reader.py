@@ -103,15 +103,14 @@ def process_docx(ruta_archivo):
         log_error(ruta_archivo, f"Error processing DOCX: {e}")
         return None, None
 
-def process_file(args):
-    ruta_archivo, ext = args
+def process_file(ruta_archivo, ext):
     if ext == '.pdf':
-        result, error = process_pdf(ruta_archivo)
+        result, author = process_pdf(ruta_archivo)
     elif ext == '.epub':
-        result, error = process_epub(ruta_archivo)
+        result, author = process_epub(ruta_archivo)
     elif ext == '.docx':
-        result, error = process_docx(ruta_archivo)
+        result, author = process_docx(ruta_archivo)
     else:
         log_error(ruta_archivo, f"Unsupported file type: {ext}")
-        result, error = None, None
-    return ruta_archivo, result, error
+        result, author = None, None
+    return result, author

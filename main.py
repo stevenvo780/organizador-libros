@@ -1,9 +1,9 @@
 import os
 import json
-import shutil
 from tqdm import tqdm
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from dotenv import load_dotenv
+from multiprocessing import Manager
 
 from analysis import extract_authors_batch
 from file_reader import process_file
@@ -16,6 +16,7 @@ CARPETA_ENTRADA = '/mnt/FASTDATA/LibrosBiblioteca'
 CARPETA_SALIDA = 'Libros_Organizados'
 LOG_FILE = 'errores_procesamiento.json'
 MAX_WORKERS = os.cpu_count()
+BATCH_SIZE = 64
 
 def main():
     if not os.path.exists(CARPETA_SALIDA):
@@ -37,22 +38,35 @@ def main():
     autores_extraidos = []
 
     with ProcessPoolExecutor(max_workers=MAX_WORKERS) as executor:
-        futures = {executor.submit(process_file, args): args[0] for args in archivos_para_procesar}
+        futures = {executor.submit(process_file, ruta_archivo, ext): ruta_archivo for ruta_archivo, ext in archivos_para_procesar}
         for future in tqdm(as_completed(futures), total=len(futures), desc="Extrayendo textos de archivos", unit="archivo"):
             ruta_archivo = futures[future]
             try:
-                ruta_archivo, result, error = future.result()
+                result, author = future.result()
                 if result is not None:
                     textos_para_procesar.append(result)
                     rutas_archivos.append(ruta_archivo)
-                    autores_extraidos.append(error)
+                    autores_extraidos.append(author)
+                else:
+                    log_error(ruta_archivo, "No se pudo extraer texto del archivo.")
             except Exception as e:
                 log_error(ruta_archivo, str(e))
 
-    autores_extraidos = extract_authors_batch(textos_para_procesar, autores_extraidos, rutas_archivos)
+    with ProcessPoolExecutor(max_workers=MAX_WORKERS) as executor:
+        for i in tqdm(range(0, len(textos_para_procesar), BATCH_SIZE), desc="Extrayendo autores", unit="lote"):
+            batch_texts = textos_para_procesar[i:i+BATCH_SIZE]
+            batch_authors = autores_extraidos[i:i+BATCH_SIZE]
+            batch_rutas = rutas_archivos[i:i+BATCH_SIZE]
+            autores_extraidos[i:i+BATCH_SIZE] = list(executor.map(
+                lambda x: extract_authors_batch(*x), 
+                zip(batch_texts, batch_authors, batch_rutas)
+            ))
+
+    manager = Manager()
+    known_authors = manager.list()
 
     with ProcessPoolExecutor(max_workers=MAX_WORKERS) as executor:
-        futures = [executor.submit(organize_file, (idx, author, rutas_archivos)) for idx, author in enumerate(autores_extraidos)]
+        futures = [executor.submit(organize_file, ruta_archivo, author, known_authors) for ruta_archivo, author in zip(rutas_archivos, autores_extraidos)]
         for future in tqdm(as_completed(futures), total=len(futures), desc="Organizando archivos por autor", unit="archivo"):
             future.result()
 
