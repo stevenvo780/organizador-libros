@@ -179,6 +179,8 @@ def main():
             except Exception as e:
                 archivos_error.append((ruta_archivo, str(e)))
 
+    executor.shutdown(wait=True)
+
     cleaned_texts = [clean_text(text) for text in textos_para_procesar]
     dataset = Dataset.from_dict({
         'context': cleaned_texts,
@@ -229,6 +231,8 @@ def main():
     }
     with open(LOG_FILE, 'w', encoding='utf-8') as log_file:
         json.dump(log_data, log_file, indent=4, ensure_ascii=False)
+
+    print("Terminé")
 
 if __name__ == '__main__':
     main()
