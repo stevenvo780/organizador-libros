@@ -53,9 +53,18 @@ def cargar_archivos(cola_archivos, CARPETA_ENTRADA, BATCH_SIZE):
                     archivos_para_procesar.append((ruta_archivo, ext))
                 else:
                     log_data["archivos_no_soportados"].append(ruta_archivo)
-    
+
     for i in range(0, len(archivos_para_procesar), BATCH_SIZE):
         batch_archivos = archivos_para_procesar[i:i+BATCH_SIZE]
         cola_archivos.put(batch_archivos)
 
-    return len(archivos_para_procesar)
+def contar_archivos(CARPETA_ENTRADA):
+    total_archivos = 0
+    for root, _, files in os.walk(CARPETA_ENTRADA):
+        for nombre_archivo in files:
+            ruta_archivo = os.path.join(root, nombre_archivo)
+            if os.path.isfile(ruta_archivo):
+                ext = os.path.splitext(ruta_archivo)[1].lower()
+                if any(ext in formatos for formatos in FORMATOS_ARCHIVOS.values()):
+                    total_archivos += 1
+    return total_archivos

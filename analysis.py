@@ -21,11 +21,15 @@ tqa_pipeline = pipeline(
     clean_up_tokenization_spaces=False
 )
 
-ner_pipeline = pipeline("ner", model="dccuchile/bert-base-spanish-wwm-cased-finetuned-ner", device=0 if device == "cuda" else -1)
+ner_pipeline = pipeline(
+    "ner",
+    model="dccuchile/bert-base-spanish-wwm-cased-finetuned-ner",
+    device=0 if device == "cuda" else -1
+)
 
 def extract_author_using_ner(text):
     ner_results = ner_pipeline(text)
-    author_candidates = [entity['word'] for entity in ner_results if entity['entity'] == 'B-PER']
+    author_candidates = [entity['word'] for entity in ner_results if 'PER' in entity['entity']]
     if author_candidates:
         return ' '.join(author_candidates)
     return None
@@ -33,11 +37,11 @@ def extract_author_using_ner(text):
 def extract_authors_batch(text, author, ruta_archivo, batch_size):
     if author:
         return author
-    
+
     qa_inputs = {'context': text[:MAX_CHARACTERS].strip(), 'question': QUESTION_AUTHOR}
 
     try:
-        answer = tqa_pipeline(qa_inputs, batch_size=batch_size)[0].get('answer', None)
+        answer = tqa_pipeline(qa_inputs, batch_size=batch_size).get('answer', None)
         if answer and answer.lower() not in RESPUESTA_IA_NO_ENCONTRADA:
             return answer
     except Exception as e:
@@ -46,6 +50,6 @@ def extract_authors_batch(text, author, ruta_archivo, batch_size):
     author_from_ner = extract_author_using_ner(text)
     if author_from_ner:
         return author_from_ner
-    
+
     log_error(ruta_archivo, "No se pudo determinar el autor.")
     return None

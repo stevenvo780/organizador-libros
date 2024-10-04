@@ -8,7 +8,7 @@ from dotenv import load_dotenv
 from analysis import extract_authors_batch
 from file_reader import process_file
 from organizer import organize_file
-from utils import log_data, log_error, cargar_archivos
+from utils import log_data, log_error, cargar_archivos, contar_archivos
 
 load_dotenv()
 
@@ -98,7 +98,7 @@ def main():
     thread_cargar = Thread(target=cargar_archivos, args=(cola_archivos, CARPETA_ENTRADA, BATCH_SIZE))
     thread_cargar.start()
 
-    total_archivos = cargar_archivos(cola_archivos, CARPETA_ENTRADA, BATCH_SIZE)
+    total_archivos = contar_archivos(CARPETA_ENTRADA)
 
     thread_procesar = Thread(target=procesar_archivos, args=(cola_archivos, cola_analisis, total_archivos))
     thread_analizar = Thread(target=analizar_autores, args=(cola_analisis, cola_organizacion, total_archivos))

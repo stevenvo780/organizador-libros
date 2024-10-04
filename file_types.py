@@ -20,7 +20,7 @@ RESPUESTA_IA_NO_ENCONTRADA = [
     'no tengo respuesta a esa pregunta',
     'no tengo respuesta a eso',
     'no tengo idea',
-    'no'
+    'no',
     'no answer',
     'no answer to that',
     'no answer to that question',
