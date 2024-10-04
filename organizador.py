@@ -42,6 +42,13 @@ qa_pipeline = pipeline(
 )
 
 known_authors = set()
+log_data = {
+    "archivos_error": [],
+    "archivos_no_soportados": []
+}
+
+def log_error(ruta_archivo, mensaje):
+    log_data["archivos_error"].append({"archivo": ruta_archivo, "error": mensaje})
 
 def clean_text(text):
     text = text.encode('utf-8', 'ignore').decode('utf-8', 'ignore')
@@ -76,7 +83,11 @@ def get_best_matching_author(name):
 
 def process_pdf(ruta_archivo):
     try:
-        lector = PdfReader(ruta_archivo)
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            lector = PdfReader(ruta_archivo)
+            for warning in w:
+                log_error(ruta_archivo, str(warning.message))
         num_paginas = min(MAX_PAGES, len(lector.pages))
         texto = ''
         for num_pagina in range(num_paginas):
@@ -88,13 +99,16 @@ def process_pdf(ruta_archivo):
         author = info.get('/Author', None) if info else None
         return clean_text(texto), author
     except Exception as e:
-        return f"Error processing PDF {ruta_archivo}: {e}", None
+        log_error(ruta_archivo, f"Error processing PDF: {e}")
+        return None, None
 
 def process_epub(ruta_archivo):
     try:
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
             libro = epub.read_epub(ruta_archivo)
+            for warning in w:
+                log_error(ruta_archivo, str(warning.message))
         texto = ''
         conteo = 0
         for item in libro.get_items():
@@ -109,7 +123,8 @@ def process_epub(ruta_archivo):
         author = authors[0][0] if authors else None
         return clean_text(texto), author
     except Exception as e:
-        return f"Error processing EPUB {ruta_archivo}: {e}", None
+        log_error(ruta_archivo, f"Error processing EPUB: {e}")
+        return None, None
 
 def process_docx(ruta_archivo):
     try:
@@ -122,25 +137,23 @@ def process_docx(ruta_archivo):
         author = core_properties.author
         return clean_text(texto), author
     except Exception as e:
-        return f"Error processing DOCX {ruta_archivo}: {e}", None
+        log_error(ruta_archivo, f"Error processing DOCX: {e}")
+        return None, None
 
 def process_file(args):
     ruta_archivo, ext = args
     if ext == '.pdf':
-        result, author = process_pdf(ruta_archivo)
+        result, error = process_pdf(ruta_archivo)
     elif ext == '.epub':
-        result, author = process_epub(ruta_archivo)
+        result, error = process_epub(ruta_archivo)
     elif ext == '.docx':
-        result, author = process_docx(ruta_archivo)
+        result, error = process_docx(ruta_archivo)
     else:
+        log_error(ruta_archivo, f"Unsupported file type: {ext}")
         result = None
-        author = None
-    return ruta_archivo, result, author
+    return ruta_archivo, result, error
 
 def main():
-    archivos_error = []
-    archivos_no_soportados = []
-
     if not os.path.exists(CARPETA_SALIDA):
         os.makedirs(CARPETA_SALIDA)
 
@@ -153,7 +166,7 @@ def main():
                 if ext in ['.pdf', '.epub', '.docx']:
                     archivos_para_procesar.append((ruta_archivo, ext))
                 else:
-                    archivos_no_soportados.append(ruta_archivo)
+                    log_data["archivos_no_soportados"].append(ruta_archivo)
 
     textos_para_procesar = []
     rutas_archivos = []
@@ -164,18 +177,13 @@ def main():
         for future in tqdm(as_completed(futures), total=len(futures), desc="Extrayendo textos de archivos", unit="archivo"):
             ruta_archivo = futures[future]
             try:
-                ruta_archivo, result, author = future.result()
-                if result is None or result.startswith("Error processing"):
-                    archivos_error.append((ruta_archivo, result))
-                else:
+                ruta_archivo, result, error = future.result()
+                if result is not None:
                     textos_para_procesar.append(result)
                     rutas_archivos.append(ruta_archivo)
-                    autores_extraidos.append(author)
+                    autores_extraidos.append(None)
             except Exception as e:
-                archivos_error.append((ruta_archivo, str(e)))
-                textos_para_procesar.append('')
-                rutas_archivos.append(ruta_archivo)
-                autores_extraidos.append(None)
+                log_error(ruta_archivo, str(e))
 
     indices_sin_autor = [i for i, autor in enumerate(autores_extraidos) if not autor]
 
@@ -190,8 +198,7 @@ def main():
             for idx, text in zip(batch_indices, batch_texts):
                 context = text[:MAX_CHARACTERS].strip()
                 if not context:
-                    autores_extraidos[idx] = None
-                    archivos_error.append((rutas_archivos[idx], "Contexto vacío, no se puede extraer autor"))
+                    log_error(rutas_archivos[idx], "Contexto vacío, no se puede extraer autor")
                     continue
                 qa_inputs.append({'context': context, 'question': '¿Quién es el autor del libro?'})
                 valid_indices.append(idx)
@@ -206,7 +213,7 @@ def main():
                     autores_extraidos[idx_output] = answer
             except Exception as e:
                 for idx_error in valid_indices:
-                    archivos_error.append((rutas_archivos[idx_error], f"Error processing QA: {e}"))
+                    log_error(rutas_archivos[idx_error], f"Error processing QA: {e}")
                     autores_extraidos[idx_error] = None
 
     for idx, author in enumerate(tqdm(autores_extraidos, desc="Organizando archivos por autor", unit="archivo")):
@@ -227,12 +234,8 @@ def main():
 
             shutil.copy2(ruta_archivo, os.path.join(carpeta_autor, nombre_archivo))
         except Exception as e:
-            archivos_error.append((ruta_archivo, str(e)))
+            log_error(ruta_archivo, str(e))
 
-    log_data = {
-        "archivos_error": archivos_error,
-        "archivos_no_soportados": archivos_no_soportados
-    }
     with open(LOG_FILE, 'w', encoding='utf-8') as log_file:
         json.dump(log_data, log_file, indent=4, ensure_ascii=False)
 
