@@ -93,9 +93,12 @@ def process_pdf(ruta_archivo):
             texto_pagina = pagina.extract_text()
             if texto_pagina:
                 texto += texto_pagina + '\n'
-        return clean_text(texto)
+        # Extraer autor de los metadatos
+        info = lector.metadata
+        author = info.get('/Author', None) if info else None
+        return clean_text(texto), author
     except Exception as e:
-        return f"Error processing PDF {ruta_archivo}: {e}"
+        return f"Error processing PDF {ruta_archivo}: {e}", None
 
 def process_epub(ruta_archivo):
     try:
@@ -112,9 +115,15 @@ def process_epub(ruta_archivo):
                 conteo += 1
                 if conteo >= MAX_EPUB_ITEMS:
                     break
-        return clean_text(texto)
+        # Extraer autor de los metadatos
+        authors = libro.get_metadata('DC', 'creator')
+        if authors:
+            author = authors[0][0]
+        else:
+            author = None
+        return clean_text(texto), author
     except Exception as e:
-        return f"Error processing EPUB {ruta_archivo}: {e}"
+        return f"Error processing EPUB {ruta_archivo}: {e}", None
 
 def process_docx(ruta_archivo):
     try:
@@ -123,21 +132,25 @@ def process_docx(ruta_archivo):
         num_parrafos = min(MAX_PAGES * MAX_PARAGRAPHS_PER_PAGE, len(documento.paragraphs))
         for i in range(num_parrafos):
             texto += documento.paragraphs[i].text + '\n'
-        return clean_text(texto)
+        # Extraer autor de los metadatos
+        core_properties = documento.core_properties
+        author = core_properties.author
+        return clean_text(texto), author
     except Exception as e:
-        return f"Error processing DOCX {ruta_archivo}: {e}"
+        return f"Error processing DOCX {ruta_archivo}: {e}", None
 
 def process_file(args):
     ruta_archivo, ext = args
     if ext == '.pdf':
-        result = process_pdf(ruta_archivo)
+        result, author = process_pdf(ruta_archivo)
     elif ext == '.epub':
-        result = process_epub(ruta_archivo)
+        result, author = process_epub(ruta_archivo)
     elif ext == '.docx':
-        result = process_docx(ruta_archivo)
+        result, author = process_docx(ruta_archivo)
     else:
         result = None
-    return ruta_archivo, result
+        author = None
+    return ruta_archivo, result, author
 
 def main():
     archivos_error = []
@@ -159,49 +172,66 @@ def main():
 
     textos_para_procesar = []
     rutas_archivos = []
+    autores_extraidos = []
+
     with ProcessPoolExecutor(max_workers=MAX_WORKERS) as executor:
         futures = {executor.submit(process_file, args): args[0] for args in archivos_para_procesar}
         for future in tqdm(as_completed(futures), total=len(futures), desc="Extrayendo textos de archivos", unit="archivo"):
             ruta_archivo = futures[future]
             try:
-                ruta_archivo, result = future.result()
+                ruta_archivo, result, author = future.result()
                 if result is None or result.startswith("Error processing"):
                     archivos_error.append((ruta_archivo, result))
                 else:
                     textos_para_procesar.append(result)
                     rutas_archivos.append(ruta_archivo)
+                    autores_extraidos.append(author)
             except Exception as e:
                 archivos_error.append((ruta_archivo, str(e)))
+                textos_para_procesar.append('')
+                rutas_archivos.append(ruta_archivo)
+                autores_extraidos.append(None)
 
-    # Procesamiento en batches para aprovechar al máximo la GPU
-    authors = []
-    for batch_start in tqdm(range(0, len(textos_para_procesar), BATCH_SIZE), desc="Extrayendo autores", unit="batch"):
-        batch_end = min(batch_start + BATCH_SIZE, len(textos_para_procesar))
-        batch_texts = textos_para_procesar[batch_start:batch_end]
-        batch_rutas = rutas_archivos[batch_start:batch_end]
+    indices_sin_autor = [i for i, autor in enumerate(autores_extraidos) if not autor]
 
-        # Preprocesar el contexto de cada texto en el batch
-        qa_inputs = []
-        for text in batch_texts:
-            context = text[:MAX_CHARACTERS]
-            context_tokens = qa_pipeline.tokenizer.encode(context, add_special_tokens=False)
-            if len(context_tokens) > MAX_LENGTH_QA:
-                context_tokens = context_tokens[:MAX_LENGTH_QA]
-            context = qa_pipeline.tokenizer.decode(context_tokens, skip_special_tokens=True)
-            qa_inputs.append({'context': context, 'question': '¿Cuál es el nombre completo del autor del libro?'})
+    if indices_sin_autor:
+        for batch_start in tqdm(range(0, len(indices_sin_autor), BATCH_SIZE), desc="Extrayendo autores", unit="batch"):
+            batch_indices = indices_sin_autor[batch_start:batch_start+BATCH_SIZE]
+            batch_texts = [textos_para_procesar[i] for i in batch_indices]
+            batch_rutas = [rutas_archivos[i] for i in batch_indices]
 
-        try:
-            # Procesar el batch completo en la GPU
-            outputs = qa_pipeline(qa_inputs, batch_size=BATCH_SIZE)
-            for output in outputs:
-                author = output.get('answer', None)
-                authors.append(author)
-        except Exception as e:
-            for idx in range(len(batch_rutas)):
-                archivos_error.append((batch_rutas[idx], f"Error processing QA: {e}"))
-                authors.append(None)
+            # Preprocesar el contexto de cada texto en el batch
+            qa_inputs = []
+            valid_indices = []
+            for idx, text in zip(batch_indices, batch_texts):
+                context = text[:MAX_CHARACTERS].strip()
+                if not context:
+                    # Si el contexto está vacío, asignamos 'Autor Desconocido' directamente
+                    autores_extraidos[idx] = None
+                    archivos_error.append((rutas_archivos[idx], "Contexto vacío, no se puede extraer autor"))
+                    continue
+                context_tokens = qa_pipeline.tokenizer.encode(context, add_special_tokens=False)
+                if len(context_tokens) > MAX_LENGTH_QA:
+                    context_tokens = context_tokens[:MAX_LENGTH_QA]
+                context = qa_pipeline.tokenizer.decode(context_tokens, skip_special_tokens=True)
+                qa_inputs.append({'context': context, 'question': '¿Quién es el autor del libro?'})
+                valid_indices.append(idx)
 
-    for idx, author in enumerate(tqdm(authors, desc="Organizando archivos por autor", unit="archivo")):
+            if not qa_inputs:
+                continue  # Si no hay inputs válidos, pasar al siguiente batch
+
+            try:
+                # Procesar el batch completo en la GPU
+                outputs = qa_pipeline(qa_inputs, batch_size=BATCH_SIZE)
+                for idx_output, output in zip(valid_indices, outputs):
+                    answer = output.get('answer', None)
+                    autores_extraidos[idx_output] = answer
+            except Exception as e:
+                for idx_error in valid_indices:
+                    archivos_error.append((rutas_archivos[idx_error], f"Error processing QA: {e}"))
+                    autores_extraidos[idx_error] = None
+
+    for idx, author in enumerate(tqdm(autores_extraidos, desc="Organizando archivos por autor", unit="archivo")):
         ruta_archivo = rutas_archivos[idx]
         nombre_archivo = os.path.basename(ruta_archivo)
         try:
