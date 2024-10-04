@@ -1,11 +1,16 @@
 import fitz
 from PyPDF2 import PdfReader
+from pdfminer.high_level import extract_text as pdfminer_extract_text
 import warnings
 import docx
 from ebooklib import epub
 import re
 import io
 from contextlib import redirect_stderr
+import pypandoc
+import pytesseract
+from PIL import Image
+import tempfile
 from utils import clean_text, log_error
 
 MAX_PAGES = 10
@@ -22,14 +27,13 @@ def process_pdf(ruta_archivo):
                 for num_pagina in range(min(MAX_PAGES, len(documento))):
                     pagina = documento.load_page(num_pagina)
                     texto += pagina.get_text() + "\n"
-                info = documento.metadata
-                author = info.get('author', None) if info else None
             stderr_output = buf.getvalue()
             if stderr_output:
                 log_error(ruta_archivo, f"PyMuPDF stderr: {stderr_output}")
             for warning in w:
                 log_error(ruta_archivo, f"PyMuPDF warning: {warning.message}")
-        return clean_text(texto), author
+        if texto.strip():
+            return clean_text(texto), None
     except Exception as e:
         log_error(ruta_archivo, f"Error processing PDF with PyMuPDF: {e}")
 
@@ -49,17 +53,40 @@ def process_pdf(ruta_archivo):
                     except Exception as e:
                         log_error(ruta_archivo, f"Error extracting text from page {num_pagina}: {e}")
                         continue
-                info = lector.metadata
-                author = info.get('/Author', None) if info else None
             stderr_output = buf.getvalue()
             if stderr_output:
                 log_error(ruta_archivo, f"PyPDF2 stderr: {stderr_output}")
             for warning in w:
                 log_error(ruta_archivo, f"PyPDF2 warning: {warning.message}")
-        return clean_text(texto), author
+        if texto.strip():
+            return clean_text(texto), None
     except Exception as e:
         log_error(ruta_archivo, f"Error processing PDF with PyPDF2: {e}")
-        return None, None
+
+    try:
+        texto = pdfminer_extract_text(ruta_archivo, maxpages=MAX_PAGES)
+        if texto.strip():
+            return clean_text(texto), None
+    except Exception as e:
+        log_error(ruta_archivo, f"Error processing PDF with pdfminer.six: {e}")
+
+    try:
+        documento = fitz.open(ruta_archivo)
+        texto = ""
+        for num_pagina in range(min(MAX_PAGES, len(documento))):
+            pagina = documento.load_page(num_pagina)
+            imagen = pagina.get_pixmap()
+            with tempfile.NamedTemporaryFile(suffix=".png") as temp_img_file:
+                imagen.save(temp_img_file.name)
+                texto_ocr = pytesseract.image_to_string(Image.open(temp_img_file.name))
+                texto += texto_ocr + "\n"
+        if texto.strip():
+            return clean_text(texto), None
+    except Exception as e:
+        log_error(ruta_archivo, f"Error processing PDF with OCR: {e}")
+
+    log_error(ruta_archivo, "No se pudo extraer el texto del PDF.")
+    return None, None
 
 def process_epub(ruta_archivo):
     try:
@@ -76,11 +103,9 @@ def process_epub(ruta_archivo):
                     conteo += 1
                     if conteo >= MAX_EPUB_ITEMS:
                         break
-            authors = libro.get_metadata('DC', 'creator')
-            author = authors[0][0] if authors else None
         for warning in w:
             log_error(ruta_archivo, f"EPUB warning: {warning.message}")
-        return clean_text(texto), author
+        return clean_text(texto), None
     except Exception as e:
         log_error(ruta_archivo, f"Error processing EPUB: {e}")
         return None, None
@@ -94,22 +119,40 @@ def process_docx(ruta_archivo):
             num_parrafos = min(MAX_PAGES * MAX_PARAGRAPHS_PER_PAGE, len(documento.paragraphs))
             for i in range(num_parrafos):
                 texto += documento.paragraphs[i].text + '\n'
-            core_properties = documento.core_properties
-            author = core_properties.author
         for warning in w:
             log_error(ruta_archivo, f"DOCX warning: {warning.message}")
-        return clean_text(texto), author
+        return clean_text(texto), None
     except Exception as e:
         log_error(ruta_archivo, f"Error processing DOCX: {e}")
         return None, None
 
+def process_doc(ruta_archivo):
+    try:
+        texto = pypandoc.convert_file(ruta_archivo, 'plain', format='doc')
+        return clean_text(texto), None
+    except Exception as e:
+        log_error(ruta_archivo, f"Error processing DOC: {e}")
+        return None, None
+
+def process_rtf(ruta_archivo):
+    try:
+        texto = pypandoc.convert_file(ruta_archivo, 'plain', format='rtf')
+        return clean_text(texto), None
+    except Exception as e:
+        log_error(ruta_archivo, f"Error processing RTF: {e}")
+        return None, None
+
 def process_file(ruta_archivo, ext):
-    if ext == '.pdf':
+    if ext in ['.pdf', '.PDF', '.pdf_']:
         result, author = process_pdf(ruta_archivo)
     elif ext == '.epub':
         result, author = process_epub(ruta_archivo)
     elif ext == '.docx':
         result, author = process_docx(ruta_archivo)
+    elif ext in ['.doc', '.DOC']:
+        result, author = process_doc(ruta_archivo)
+    elif ext == '.rtf':
+        result, author = process_rtf(ruta_archivo)
     else:
         log_error(ruta_archivo, f"Unsupported file type: {ext}")
         result, author = None, None
