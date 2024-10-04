@@ -1,6 +1,7 @@
 import re
 import unicodedata
 from difflib import SequenceMatcher
+import os
 
 log_data = {
     "archivos_error": [],
@@ -39,3 +40,21 @@ def get_best_matching_author(name, known_authors):
     else:
         known_authors.append(name)
         return name
+
+def cargar_archivos(cola_archivos, CARPETA_ENTRADA, BATCH_SIZE):
+    archivos_para_procesar = []
+    for root, _, files in os.walk(CARPETA_ENTRADA):
+        for nombre_archivo in files:
+            ruta_archivo = os.path.join(root, nombre_archivo)
+            if os.path.isfile(ruta_archivo):
+                ext = os.path.splitext(ruta_archivo)[1].lower()
+                if ext in ['.pdf', '.epub', '.docx', '.doc', '.rtf']:
+                    archivos_para_procesar.append((ruta_archivo, ext))
+                else:
+                    log_data["archivos_no_soportados"].append(ruta_archivo)
+    
+    for i in range(0, len(archivos_para_procesar), BATCH_SIZE):
+        batch_archivos = archivos_para_procesar[i:i+BATCH_SIZE]
+        cola_archivos.put(batch_archivos)
+
+    return len(archivos_para_procesar)

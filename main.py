@@ -5,10 +5,10 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 from multiprocessing import Manager, Queue
 from threading import Thread
 from dotenv import load_dotenv
-from analysis import extract_authors_batch  # Importamos desde analysis
+from analysis import extract_authors_batch
 from file_reader import process_file
 from organizer import organize_file
-from utils import log_data, log_error
+from utils import log_data, log_error, cargar_archivos
 
 load_dotenv()
 
@@ -16,25 +16,7 @@ CARPETA_ENTRADA = '/mnt/FASTDATA/LibrosBiblioteca'
 CARPETA_SALIDA = 'Libros_Organizados'
 LOG_FILE = 'errores_procesamiento.json'
 MAX_WORKERS = os.cpu_count()
-BATCH_SIZE = 64  # Aquí definimos el tamaño de los lotes
-
-def cargar_archivos(cola_archivos):
-    archivos_para_procesar = []
-    for root, _, files in os.walk(CARPETA_ENTRADA):
-        for nombre_archivo in files:
-            ruta_archivo = os.path.join(root, nombre_archivo)
-            if os.path.isfile(ruta_archivo):
-                ext = os.path.splitext(ruta_archivo)[1].lower()
-                if ext in ['.pdf', '.epub', '.docx', '.doc', '.rtf']:
-                    archivos_para_procesar.append((ruta_archivo, ext))
-                else:
-                    log_data["archivos_no_soportados"].append(ruta_archivo)
-    
-    for i in range(0, len(archivos_para_procesar), BATCH_SIZE):
-        batch_archivos = archivos_para_procesar[i:i+BATCH_SIZE]
-        cola_archivos.put(batch_archivos)
-
-    return len(archivos_para_procesar)
+BATCH_SIZE = 64 
 
 def procesar_archivos(cola_archivos, cola_analisis, total_archivos):
     with ProcessPoolExecutor(max_workers=MAX_WORKERS) as executor:
@@ -118,12 +100,12 @@ def main():
     manager = Manager()
     known_authors = manager.list()
 
-    thread_cargar = Thread(target=cargar_archivos, args=(cola_archivos,))
+    thread_cargar = Thread(target=cargar_archivos, args=(cola_archivos, CARPETA_ENTRADA, BATCH_SIZE))
     thread_cargar.start()
-    total_archivos = cargar_archivos(cola_archivos)
+    total_archivos = cargar_archivos(cola_archivos, CARPETA_ENTRADA, BATCH_SIZE)
 
     thread_procesar = Thread(target=procesar_archivos, args=(cola_archivos, cola_analisis, total_archivos))
-    thread_analizar = Thread(target=analizar_autores, args=(cola_analisis, cola_organizacion, total_archivos, BATCH_SIZE))  # Pasamos BATCH_SIZE aquí
+    thread_analizar = Thread(target=analizar_autores, args=(cola_analisis, cola_organizacion, total_archivos, BATCH_SIZE))
     thread_organizar = Thread(target=organizar_archivos, args=(cola_organizacion, known_authors, total_archivos))
 
     thread_procesar.start()
