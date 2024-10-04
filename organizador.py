@@ -41,7 +41,7 @@ ner_pipeline = pipeline(
     device=0 if device == "cuda" else -1
 )
 
-MAX_LENGTH = 8000
+MAX_LENGTH = 10000
 MAX_WORKERS = os.cpu_count()
 LOG_FILE = 'errores_procesamiento.json'
 BATCH_SIZE = 64
