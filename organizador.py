@@ -24,7 +24,8 @@ MAX_WORKERS = os.cpu_count()
 MAX_PAGES = 10
 MAX_PARAGRAPHS_PER_PAGE = 30
 MAX_EPUB_ITEMS = 10
-MAX_CHARACTERS = 5000  # Limit the text length to prevent tokenizer overflow
+MAX_CHARACTERS = 8000
+BATCH_SIZE = 64
 
 # Configuración del dispositivo
 device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -172,23 +173,33 @@ def main():
             except Exception as e:
                 archivos_error.append((ruta_archivo, str(e)))
 
+    # Procesamiento en batches para aprovechar al máximo la GPU
     authors = []
-    for idx, text in enumerate(tqdm(textos_para_procesar, desc="Extrayendo autores", unit="archivo")):
-        # Limit the context to the first MAX_CHARACTERS characters
-        context = text[:MAX_CHARACTERS]
-        try:
-            # Ensure the context is within tokenizer limits
+    for batch_start in tqdm(range(0, len(textos_para_procesar), BATCH_SIZE), desc="Extrayendo autores", unit="batch"):
+        batch_end = min(batch_start + BATCH_SIZE, len(textos_para_procesar))
+        batch_texts = textos_para_procesar[batch_start:batch_end]
+        batch_rutas = rutas_archivos[batch_start:batch_end]
+
+        # Preprocesar el contexto de cada texto en el batch
+        qa_inputs = []
+        for text in batch_texts:
+            context = text[:MAX_CHARACTERS]
             context_tokens = qa_pipeline.tokenizer.encode(context, add_special_tokens=False)
             if len(context_tokens) > MAX_LENGTH_QA:
                 context_tokens = context_tokens[:MAX_LENGTH_QA]
             context = qa_pipeline.tokenizer.decode(context_tokens, skip_special_tokens=True)
-            qa_input = {'context': context, 'question': '¿Cuál es el nombre completo del autor del libro?'}
-            output = qa_pipeline(**qa_input)
-            author = output.get('answer', None)
+            qa_inputs.append({'context': context, 'question': '¿Cuál es el nombre completo del autor del libro?'})
+
+        try:
+            # Procesar el batch completo en la GPU
+            outputs = qa_pipeline(qa_inputs, batch_size=BATCH_SIZE)
+            for output in outputs:
+                author = output.get('answer', None)
+                authors.append(author)
         except Exception as e:
-            author = None
-            archivos_error.append((rutas_archivos[idx], f"Error processing QA: {e}"))
-        authors.append(author)
+            for idx in range(len(batch_rutas)):
+                archivos_error.append((batch_rutas[idx], f"Error processing QA: {e}"))
+                authors.append(None)
 
     for idx, author in enumerate(tqdm(authors, desc="Organizando archivos por autor", unit="archivo")):
         ruta_archivo = rutas_archivos[idx]
