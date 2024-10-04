@@ -23,7 +23,7 @@ MAX_WORKERS = os.cpu_count()
 MAX_PAGES = 10
 MAX_PARAGRAPHS_PER_PAGE = 30
 MAX_EPUB_ITEMS = 10
-MAX_CHARACTERS = 8000
+MAX_CHARACTERS = 15000
 BATCH_SIZE = 64
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -36,12 +36,10 @@ else:
 
 qa_pipeline = pipeline(
     "question-answering",
-    model="deepset/roberta-base-squad2",
-    tokenizer="deepset/roberta-base-squad2",
+    model="bert-base-multilingual-cased",
+    tokenizer="bert-base-multilingual-cased",
     device=0 if device == "cuda" else -1
 )
-
-MAX_LENGTH_QA = qa_pipeline.tokenizer.model_max_length
 
 known_authors = set()
 
@@ -195,10 +193,6 @@ def main():
                     autores_extraidos[idx] = None
                     archivos_error.append((rutas_archivos[idx], "Contexto vacío, no se puede extraer autor"))
                     continue
-                context_tokens = qa_pipeline.tokenizer.encode(context, add_special_tokens=False)
-                if len(context_tokens) > MAX_LENGTH_QA:
-                    context_tokens = context_tokens[:MAX_LENGTH_QA]
-                context = qa_pipeline.tokenizer.decode(context_tokens, skip_special_tokens=True)
                 qa_inputs.append({'context': context, 'question': '¿Quién es el autor del libro?'})
                 valid_indices.append(idx)
 
