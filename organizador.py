@@ -14,20 +14,16 @@ from ebooklib import epub
 import docx
 from datasets import Dataset
 
-# Login to Hugging Face (replace with your own token or use environment variable)
 login(token="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")
 
-# Determine the device to use (GPU if available)
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
-# Optimize PyTorch settings
 torch.backends.cudnn.benchmark = True
 if device == "cuda":
     torch.cuda.set_per_process_memory_fraction(0.9)
 else:
     torch.set_num_threads(os.cpu_count())
 
-# Initialize the question-answering pipeline
 qa_pipeline = pipeline(
     "question-answering",
     model="mrm8488/bert-base-spanish-wwm-cased-finetuned-spa-squad2-es",
@@ -35,24 +31,16 @@ qa_pipeline = pipeline(
     device=0 if device == "cuda" else -1
 )
 
-# Constants
-MAX_LENGTH = 2000  # Max length of context text
+MAX_LENGTH = 2000
 MAX_WORKERS = os.cpu_count()
 LOG_FILE = 'errores_procesamiento.json'
-BATCH_SIZE = 16  # Adjust batch size to fit into GPU memory
+BATCH_SIZE = 16
 
 def clean_text(text):
-    """
-    Cleans text to remove any invalid characters that may cause UnicodeEncodeError.
-    """
-    # Replace surrogate characters with a space
     text = text.encode('utf-8', 'ignore').decode('utf-8', 'ignore')
     return text
 
 def process_pdf(ruta_archivo):
-    """
-    Extracts text from the first 10 pages of a PDF file.
-    """
     try:
         lector = PdfReader(ruta_archivo)
         num_paginas = min(10, len(lector.pages))
@@ -67,9 +55,6 @@ def process_pdf(ruta_archivo):
         return f"Error processing PDF {ruta_archivo}: {e}"
 
 def process_epub(ruta_archivo):
-    """
-    Extracts text from the first 10 items of an EPUB file.
-    """
     try:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
@@ -89,13 +74,10 @@ def process_epub(ruta_archivo):
         return f"Error processing EPUB {ruta_archivo}: {e}"
 
 def process_docx(ruta_archivo):
-    """
-    Extracts text from the first 10 pages (estimated) of a DOCX file.
-    """
     try:
         documento = docx.Document(ruta_archivo)
         texto = ''
-        parrafos_por_pagina = 30  # Estimated number of paragraphs per page
+        parrafos_por_pagina = 30
         num_parrafos = min(10 * parrafos_por_pagina, len(documento.paragraphs))
         for i in range(num_parrafos):
             texto += documento.paragraphs[i].text + '\n'
@@ -104,10 +86,6 @@ def process_docx(ruta_archivo):
         return f"Error processing DOCX {ruta_archivo}: {e}"
 
 def process_file(args):
-    """
-    Processes a file based on its extension and extracts text.
-    Returns a tuple (ruta_archivo, texto extraído o mensaje de error)
-    """
     ruta_archivo, ext = args
     if ext == '.pdf':
         result = process_pdf(ruta_archivo)
@@ -116,7 +94,7 @@ def process_file(args):
     elif ext == '.docx':
         result = process_docx(ruta_archivo)
     else:
-        result = None  # Unsupported file type
+        result = None
     return ruta_archivo, result
 
 def main():
@@ -128,7 +106,6 @@ def main():
     if not os.path.exists(carpeta_salida):
         os.makedirs(carpeta_salida)
 
-    # Collect files to process
     archivos_para_procesar = []
     for root, _, files in os.walk(carpeta_entrada):
         for nombre_archivo in files:
@@ -140,7 +117,6 @@ def main():
                 else:
                     archivos_no_soportados.append(ruta_archivo)
 
-    # Extract texts from files using ProcessPoolExecutor
     textos_para_procesar = []
     rutas_archivos = []
     with ProcessPoolExecutor(max_workers=MAX_WORKERS) as executor:
@@ -157,14 +133,12 @@ def main():
             except Exception as e:
                 archivos_error.append((ruta_archivo, str(e)))
 
-    # Prepare dataset for batch processing with AI
     cleaned_texts = [clean_text(text) for text in textos_para_procesar]
     dataset = Dataset.from_dict({
         'context': cleaned_texts,
         'question': ['¿Quién es el autor del libro?'] * len(cleaned_texts)
     })
 
-    # Process texts with AI using dataset and batch mode
     print("Procesando textos con IA...")
     resultados = []
     for i in tqdm(range(0, len(dataset), BATCH_SIZE), desc="Procesando textos con IA", unit="batch"):
@@ -177,13 +151,12 @@ def main():
             resultados.extend(batch_answers)
         except Exception as e:
             resultados.extend([None] * len(batch))
-            print(f"Error processing batch: {e}")
+            archivos_error.append((f"Batch {i}-{i + BATCH_SIZE}", f"Error processing batch: {e}"))
         finally:
             if device == "cuda":
                 torch.cuda.empty_cache()
             gc.collect()
 
-    # Organize files based on authors
     for idx, autor in enumerate(resultados):
         ruta_archivo = rutas_archivos[idx]
         nombre_archivo = os.path.basename(ruta_archivo)
@@ -201,7 +174,6 @@ def main():
         except Exception as e:
             archivos_error.append((ruta_archivo, str(e)))
 
-    # Write error logs to file
     log_data = {
         "archivos_error": archivos_error,
         "archivos_no_soportados": archivos_no_soportados
