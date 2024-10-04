@@ -7,11 +7,20 @@ import docx
 from transformers import pipeline
 import warnings
 from tqdm import tqdm
+from concurrent.futures import ProcessPoolExecutor
+import torch
+from huggingface_hub import login
+
+# Autenticación en Hugging Face
+login(token="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")
 
 def process_text_with_ai(text):
-    qa_pipeline = pipeline("question-answering", model="meta-llama/LLaMA-2-7b-chat-hf", device=0, progress_bar=True)
-    result = qa_pipeline(question="¿Quién es el autor del libro?", context=text)
-    return result.get('answer', None)
+    try:
+        qa_pipeline = pipeline("question-answering", model="deepset/roberta-base-squad2", device=0, progress_bar=True)
+        result = qa_pipeline(question="¿Quién es el autor del libro?", context=text)
+        return result.get('answer', None)
+    except Exception as e:
+        return None
 
 def process_pdf(ruta_archivo):
     lector = PdfReader(ruta_archivo)
@@ -54,6 +63,38 @@ def process_docx(ruta_archivo):
         texto += documento.paragraphs[i].text + '\n'
     return process_text_with_ai(texto)
 
+def process_file(ruta_archivo, carpeta_salida):
+    archivos_error = []
+    archivos_no_soportados = []
+    nombre_archivo = os.path.basename(ruta_archivo)
+    ext = os.path.splitext(nombre_archivo)[1].lower()
+    try:
+        if ext == '.pdf':
+            autor = process_pdf(ruta_archivo)
+        elif ext == '.epub':
+            autor = process_epub(ruta_archivo)
+        elif ext == '.docx':
+            autor = process_docx(ruta_archivo)
+        else:
+            archivos_no_soportados.append(nombre_archivo)
+            return archivos_error, archivos_no_soportados
+
+        if not autor or autor.strip() == '' or autor.lower() == 'no answer':
+            carpeta_autor = os.path.join(carpeta_salida, 'Autor_Desconocido')
+        else:
+            nombre_autor = re.sub(r'[<>:"/\\|?*]', '', autor)
+            carpeta_autor = os.path.join(carpeta_salida, nombre_autor)
+
+        if not os.path.exists(carpeta_autor):
+            os.makedirs(carpeta_autor)
+
+        shutil.move(ruta_archivo, os.path.join(carpeta_autor, nombre_archivo))
+
+    except Exception as e:
+        archivos_error.append((nombre_archivo, str(e)))
+
+    return archivos_error, archivos_no_soportados
+
 def main():
     carpeta_entrada = 'Libros'
     carpeta_salida = 'Libros_Organizados'
@@ -63,37 +104,19 @@ def main():
     if not os.path.exists(carpeta_salida):
         os.makedirs(carpeta_salida)
 
+    archivos_para_procesar = []
     for root, _, files in os.walk(carpeta_entrada):
-        for nombre_archivo in tqdm(files, desc="Procesando archivos"):
+        for nombre_archivo in files:
             ruta_archivo = os.path.join(root, nombre_archivo)
-
             if os.path.isfile(ruta_archivo):
-                ext = os.path.splitext(nombre_archivo)[1].lower()
-                try:
-                    if ext == '.pdf':
-                        autor = process_pdf(ruta_archivo)
-                    elif ext == '.epub':
-                        autor = process_epub(ruta_archivo)
-                    elif ext == '.docx':
-                        autor = process_docx(ruta_archivo)
-                    else:
-                        archivos_no_soportados.append(nombre_archivo)
-                        continue
+                archivos_para_procesar.append(ruta_archivo)
 
-                    if not autor or autor.strip() == '':
-                        carpeta_autor = os.path.join(carpeta_salida, 'Autor_Desconocido')
-                    else:
-                        nombre_autor = re.sub(r'[<>:"/\\|?*]', '', autor)
-                        carpeta_autor = os.path.join(carpeta_salida, nombre_autor)
+    with ProcessPoolExecutor() as executor:
+        resultados = list(tqdm(executor.map(process_file, archivos_para_procesar, [carpeta_salida] * len(archivos_para_procesar)), total=len(archivos_para_procesar), desc="Procesando archivos"))
 
-                    if not os.path.exists(carpeta_autor):
-                        os.makedirs(carpeta_autor)
-
-                    shutil.move(ruta_archivo, os.path.join(carpeta_autor, nombre_archivo))
-
-                except Exception as e:
-                    archivos_error.append((nombre_archivo, str(e)))
-                    continue
+    for errores, no_soportados in resultados:
+        archivos_error.extend(errores)
+        archivos_no_soportados.extend(no_soportados)
 
     if archivos_error:
         print("Ocurrieron errores con los siguientes archivos:")
