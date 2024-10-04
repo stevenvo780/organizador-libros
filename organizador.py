@@ -13,11 +13,15 @@ from ebooklib import epub
 import docx
 import unicodedata
 from difflib import SequenceMatcher
+from dotenv import load_dotenv
 
-token = "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"
+load_dotenv()
+
+token = os.getenv("HUGGINGFACE_TOKEN")
 login(token=token)
 
-CARPETA_ENTRADA = '/mnt/FASTDATA/LibrosBiblioteca'
+#CARPETA_ENTRADA = '/mnt/FASTDATA/LibrosBiblioteca'
+CARPETA_ENTRADA = 'Libros'
 CARPETA_SALIDA = 'Libros_Organizados'
 LOG_FILE = 'errores_procesamiento.json'
 MAX_WORKERS = os.cpu_count()
@@ -181,7 +185,9 @@ def organize_file(args):
         if not os.path.exists(carpeta_autor):
             os.makedirs(carpeta_autor)
 
-        shutil.copy2(ruta_archivo, os.path.join(carpeta_autor, nombre_archivo))
+        destino = os.path.join(carpeta_autor, nombre_archivo)
+        if not os.path.exists(destino):
+            shutil.copy2(ruta_archivo, destino)
     except Exception as e:
         log_error(ruta_archivo, str(e))
 
