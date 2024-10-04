@@ -4,10 +4,8 @@ from utils import log_error
 
 QUESTION_AUTHOR = "¿Quién es el autor del libro?"
 MAX_CHARACTERS = 15000
-BATCH_SIZE = 64
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
-
 torch.backends.cudnn.benchmark = True
 if device == "cuda":
     torch.cuda.set_per_process_memory_fraction(0.9)
@@ -31,14 +29,14 @@ def extract_author_using_ner(text):
         return ' '.join(author_candidates)
     return None
 
-def extract_authors_batch(text, author, ruta_archivo):
+def extract_authors_batch(text, author, ruta_archivo, batch_size):
     if author:
         return author
     
     qa_inputs = {'context': text[:MAX_CHARACTERS].strip(), 'question': QUESTION_AUTHOR}
 
     try:
-        answer = tqa_pipeline(qa_inputs, batch_size=1)[0].get('answer', None)
+        answer = tqa_pipeline(qa_inputs, batch_size=batch_size)[0].get('answer', None)
         if answer and answer.lower() not in ['no sé', 'no answer']:
             return answer
     except Exception as e:

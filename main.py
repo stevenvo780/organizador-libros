@@ -5,9 +5,7 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 from multiprocessing import Manager, Queue
 from threading import Thread
 from dotenv import load_dotenv
-import torch
-from transformers import pipeline
-from analysis import extract_authors_batch
+from analysis import extract_authors_batch  # Importamos desde analysis
 from file_reader import process_file
 from organizer import organize_file
 from utils import log_data, log_error
@@ -18,25 +16,8 @@ CARPETA_ENTRADA = '/mnt/FASTDATA/LibrosBiblioteca'
 CARPETA_SALIDA = 'Libros_Organizados'
 LOG_FILE = 'errores_procesamiento.json'
 MAX_WORKERS = os.cpu_count()
-BATCH_SIZE = 64
+BATCH_SIZE = 64  # Aquí definimos el tamaño de los lotes
 
-# Configuramos el pipeline de GPU/CPU
-device = "cuda" if torch.cuda.is_available() else "cpu"
-torch.backends.cudnn.benchmark = True
-if device == "cuda":
-    torch.cuda.set_per_process_memory_fraction(0.9)
-else:
-    torch.set_num_threads(os.cpu_count())
-
-tqa_pipeline = pipeline(
-    "question-answering",
-    model="mrm8488/bert-base-spanish-wwm-cased-finetuned-spa-squad2-es",
-    tokenizer="mrm8488/bert-base-spanish-wwm-cased-finetuned-spa-squad2-es",
-    device=0 if device == "cuda" else -1,
-    clean_up_tokenization_spaces=False
-)
-
-# Función para cargar archivos en la cola
 def cargar_archivos(cola_archivos):
     archivos_para_procesar = []
     for root, _, files in os.walk(CARPETA_ENTRADA):
@@ -55,7 +36,6 @@ def cargar_archivos(cola_archivos):
 
     return len(archivos_para_procesar)
 
-# Función para procesar archivos en la CPU y enviar resultados a la cola de análisis
 def procesar_archivos(cola_archivos, cola_analisis, total_archivos):
     with ProcessPoolExecutor(max_workers=MAX_WORKERS) as executor:
         processed_files = 0
@@ -86,11 +66,9 @@ def procesar_archivos(cola_archivos, cola_analisis, total_archivos):
                     processed_files += 1
                     pbar.update(1)
 
-                # Enviar resultados a la cola de análisis
                 cola_analisis.put((textos_para_procesar, autores_extraidos, rutas_archivos))
 
-# Función para analizar autores con GPU y enviar a la cola de organización
-def analizar_autores(cola_analisis, cola_organizacion, total_archivos):
+def analizar_autores(cola_analisis, cola_organizacion, total_archivos, batch_size):
     processed_authors = 0
     with tqdm(total=total_archivos, desc="Analizando autores", unit="archivo") as pbar:
         while True:
@@ -102,17 +80,15 @@ def analizar_autores(cola_analisis, cola_organizacion, total_archivos):
             textos_para_procesar, autores_extraidos, rutas_archivos = batch_data
 
             batch_autores = list(map(
-                lambda x: extract_authors_batch(*x), 
+                lambda x: extract_authors_batch(*x, batch_size), 
                 zip(textos_para_procesar, autores_extraidos, rutas_archivos)
             ))
 
-            # Enviar a la cola de organización
             cola_organizacion.put((rutas_archivos, batch_autores))
 
             processed_authors += len(rutas_archivos)
             pbar.update(len(rutas_archivos))
 
-# Función para organizar archivos
 def organizar_archivos(cola_organizacion, known_authors, total_archivos):
     organized_files = 0
     with ProcessPoolExecutor(max_workers=MAX_WORKERS) as executor:
@@ -135,7 +111,6 @@ def main():
     if not os.path.exists(CARPETA_SALIDA):
         os.makedirs(CARPETA_SALIDA)
 
-    # Colas para cada fase
     cola_archivos = Queue()
     cola_analisis = Queue()
     cola_organizacion = Queue()
@@ -143,27 +118,22 @@ def main():
     manager = Manager()
     known_authors = manager.list()
 
-    # Iniciar el hilo para cargar archivos y contar el total de archivos
     thread_cargar = Thread(target=cargar_archivos, args=(cola_archivos,))
     thread_cargar.start()
-    total_archivos = cargar_archivos(cola_archivos)  # Obtener el número total de archivos para las barras de progreso
+    total_archivos = cargar_archivos(cola_archivos)
 
-    # Iniciar procesamiento en paralelo
     thread_procesar = Thread(target=procesar_archivos, args=(cola_archivos, cola_analisis, total_archivos))
-    thread_analizar = Thread(target=analizar_autores, args=(cola_analisis, cola_organizacion, total_archivos))
+    thread_analizar = Thread(target=analizar_autores, args=(cola_analisis, cola_organizacion, total_archivos, BATCH_SIZE))  # Pasamos BATCH_SIZE aquí
     thread_organizar = Thread(target=organizar_archivos, args=(cola_organizacion, known_authors, total_archivos))
 
     thread_procesar.start()
     thread_analizar.start()
     thread_organizar.start()
 
-    # Esperar a que el cargador termine
     thread_cargar.join()
 
-    # Indicar fin de procesamiento
     cola_archivos.put("FIN")
 
-    # Esperar a que los otros hilos terminen
     thread_procesar.join()
     thread_analizar.join()
     thread_organizar.join()
