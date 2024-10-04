@@ -51,6 +51,7 @@ def procesar_archivos(cola_archivos, cola_analisis, total_archivos):
                     cola_analisis.put((textos_para_procesar, autores_extraidos, rutas_archivos))
 
 def analizar_autores(cola_analisis, cola_organizacion, total_archivos):
+    archivos_procesados = 0
     with tqdm(total=total_archivos, desc="Analizando autores", unit="archivo") as pbar:
         while True:
             batch_data = cola_analisis.get()
@@ -59,16 +60,17 @@ def analizar_autores(cola_analisis, cola_organizacion, total_archivos):
                 break
 
             textos_para_procesar, autores_extraidos, rutas_archivos = batch_data
-
             batch_autores = list(map(
                 lambda x: extract_authors_batch(*x, BATCH_SIZE), 
                 zip(textos_para_procesar, autores_extraidos, rutas_archivos)
             ))
 
             cola_organizacion.put((rutas_archivos, batch_autores))
+            archivos_procesados += len(rutas_archivos)
             pbar.update(len(rutas_archivos))
 
 def organizar_archivos(cola_organizacion, known_authors, total_archivos):
+    archivos_procesados = 0
     with ProcessPoolExecutor(max_workers=MAX_WORKERS) as executor:
         with tqdm(total=total_archivos, desc="Organizando archivos", unit="archivo") as pbar:
             while True:
@@ -82,6 +84,7 @@ def organizar_archivos(cola_organizacion, known_authors, total_archivos):
 
                 for futuro in as_completed(futuros):
                     futuro.result()
+                    archivos_procesados += 1
                     pbar.update(1)
 
 def main():
