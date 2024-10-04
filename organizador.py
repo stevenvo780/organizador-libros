@@ -14,7 +14,6 @@ import docx
 import unicodedata
 from difflib import SequenceMatcher
 
-# Constantes
 login(token="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")
 
 CARPETA_ENTRADA = 'Libros'
@@ -27,7 +26,6 @@ MAX_EPUB_ITEMS = 10
 MAX_CHARACTERS = 8000
 BATCH_SIZE = 64
 
-# Configuración del dispositivo
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
 torch.backends.cudnn.benchmark = True
@@ -38,18 +36,16 @@ else:
 
 qa_pipeline = pipeline(
     "question-answering",
-    model="mrm8488/bert-base-spanish-wwm-cased-finetuned-spa-squad2-es",
-    tokenizer="mrm8488/bert-base-spanish-wwm-cased-finetuned-spa-squad2-es",
+    model="deepset/roberta-base-squad2",
+    tokenizer="deepset/roberta-base-squad2",
     device=0 if device == "cuda" else -1
 )
 
-# Obtener la longitud máxima permitida por el modelo
 MAX_LENGTH_QA = qa_pipeline.tokenizer.model_max_length
 
 known_authors = set()
 
 def clean_text(text):
-    # Remove invalid characters and normalize whitespace
     text = text.encode('utf-8', 'ignore').decode('utf-8', 'ignore')
     text = unicodedata.normalize('NFKD', text)
     text = re.sub(r'\s+', ' ', text)
@@ -57,10 +53,7 @@ def clean_text(text):
 
 def normalize_author_name(name):
     name = name.lower()
-    name = ''.join(
-        c for c in unicodedata.normalize('NFD', name)
-        if unicodedata.category(c) != 'Mn'
-    )
+    name = ''.join(c for c in unicodedata.normalize('NFD', name) if unicodedata.category(c) != 'Mn')
     name = re.sub(r'[^a-z\s]', '', name)
     name = ' '.join(name.split())
     return name
@@ -93,7 +86,6 @@ def process_pdf(ruta_archivo):
             texto_pagina = pagina.extract_text()
             if texto_pagina:
                 texto += texto_pagina + '\n'
-        # Extraer autor de los metadatos
         info = lector.metadata
         author = info.get('/Author', None) if info else None
         return clean_text(texto), author
@@ -115,12 +107,8 @@ def process_epub(ruta_archivo):
                 conteo += 1
                 if conteo >= MAX_EPUB_ITEMS:
                     break
-        # Extraer autor de los metadatos
         authors = libro.get_metadata('DC', 'creator')
-        if authors:
-            author = authors[0][0]
-        else:
-            author = None
+        author = authors[0][0] if authors else None
         return clean_text(texto), author
     except Exception as e:
         return f"Error processing EPUB {ruta_archivo}: {e}", None
@@ -132,7 +120,6 @@ def process_docx(ruta_archivo):
         num_parrafos = min(MAX_PAGES * MAX_PARAGRAPHS_PER_PAGE, len(documento.paragraphs))
         for i in range(num_parrafos):
             texto += documento.paragraphs[i].text + '\n'
-        # Extraer autor de los metadatos
         core_properties = documento.core_properties
         author = core_properties.author
         return clean_text(texto), author
@@ -200,13 +187,11 @@ def main():
             batch_texts = [textos_para_procesar[i] for i in batch_indices]
             batch_rutas = [rutas_archivos[i] for i in batch_indices]
 
-            # Preprocesar el contexto de cada texto en el batch
             qa_inputs = []
             valid_indices = []
             for idx, text in zip(batch_indices, batch_texts):
                 context = text[:MAX_CHARACTERS].strip()
                 if not context:
-                    # Si el contexto está vacío, asignamos 'Autor Desconocido' directamente
                     autores_extraidos[idx] = None
                     archivos_error.append((rutas_archivos[idx], "Contexto vacío, no se puede extraer autor"))
                     continue
@@ -218,10 +203,9 @@ def main():
                 valid_indices.append(idx)
 
             if not qa_inputs:
-                continue  # Si no hay inputs válidos, pasar al siguiente batch
+                continue
 
             try:
-                # Procesar el batch completo en la GPU
                 outputs = qa_pipeline(qa_inputs, batch_size=BATCH_SIZE)
                 for idx_output, output in zip(valid_indices, outputs):
                     answer = output.get('answer', None)
