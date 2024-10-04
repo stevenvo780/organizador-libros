@@ -8,6 +8,7 @@ from tqdm import tqdm
 from transformers import pipeline
 from huggingface_hub import login
 import torch
+import fitz  # PyMuPDF
 from PyPDF2 import PdfReader
 from ebooklib import epub
 import docx
@@ -98,9 +99,23 @@ def extract_author_using_ner(text):
     return None
 
 def process_pdf(ruta_archivo):
+    # Primero intentamos con PyMuPDF
+    try:
+        documento = fitz.open(ruta_archivo)
+        texto = ""
+        for num_pagina in range(min(MAX_PAGES, len(documento))):
+            pagina = documento.load_page(num_pagina)
+            texto += pagina.get_text() + "\n"
+        info = documento.metadata
+        author = info.get('author', None) if info else None
+        return clean_text(texto), author
+    except Exception as e:
+        log_error(ruta_archivo, f"Error processing PDF with PyMuPDF: {e}")
+
+    # Si falla, intentamos con PyPDF2
     try:
         with warnings.catch_warnings(record=True) as w:
-            warnings.simplefilter("always")
+            warnings.simplefilter("ignore")  # Ignorar advertencias de PyPDF2
             lector = PdfReader(ruta_archivo)
             for warning in w:
                 log_error(ruta_archivo, str(warning.message))
@@ -110,7 +125,7 @@ def process_pdf(ruta_archivo):
             pagina = lector.pages[num_pagina]
             try:
                 with warnings.catch_warnings(record=True) as w:
-                    warnings.simplefilter("ignore")
+                    warnings.simplefilter("ignore")  # Ignorar advertencias durante la extracción de texto
                     texto_pagina = pagina.extract_text()
                     for warning in w:
                         log_error(ruta_archivo, str(warning.message))
@@ -123,7 +138,7 @@ def process_pdf(ruta_archivo):
         author = info.get('/Author', None) if info else None
         return clean_text(texto), author
     except Exception as e:
-        log_error(ruta_archivo, f"Error processing PDF: {e}")
+        log_error(ruta_archivo, f"Error processing PDF with PyPDF2: {e}")
         return None, None
 
 def process_epub(ruta_archivo):
