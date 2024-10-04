@@ -14,12 +14,10 @@ import docx
 import unicodedata
 from difflib import SequenceMatcher
 
-# Autenticación con Hugging Face
 token = "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"
 login(token=token)
 
-# Definición de constantes
-CARPETA_ENTRADA = 'Libros'
+CARPETA_ENTRADA = '/mnt/FASTDATA/LibrosBiblioteca'
 CARPETA_SALIDA = 'Libros_Organizados'
 LOG_FILE = 'errores_procesamiento.json'
 MAX_WORKERS = os.cpu_count()
@@ -30,17 +28,14 @@ MAX_CHARACTERS = 15000
 BATCH_SIZE = 64
 QUESTION_AUTHOR = "¿Quién es el autor del libro?"
 
-# Configuración del dispositivo
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
-# Configuración de PyTorch
 torch.backends.cudnn.benchmark = True
 if device == "cuda":
     torch.cuda.set_per_process_memory_fraction(0.9)
 else:
     torch.set_num_threads(os.cpu_count())
 
-# Inicialización del pipeline para question-answering
 tqa_pipeline = pipeline(
     "question-answering",
     model="mrm8488/bert-base-spanish-wwm-cased-finetuned-spa-squad2-es",
@@ -48,17 +43,14 @@ tqa_pipeline = pipeline(
     device=0 if device == "cuda" else -1
 )
 
-# Inicialización del pipeline para Named Entity Recognition (NER)
 ner_pipeline = pipeline("ner", model="dccuchile/bert-base-spanish-wwm-cased-finetuned-ner")
 
-# Variables globales para manejo de errores y autores conocidos
 known_authors = set()
 log_data = {
     "archivos_error": [],
     "archivos_no_soportados": []
 }
 
-# Funciones auxiliares
 def log_error(ruta_archivo, mensaje):
     log_data["archivos_error"].append({"archivo": ruta_archivo, "error": mensaje})
 
@@ -100,7 +92,6 @@ def extract_author_using_ner(text):
         return ' '.join(author_candidates)
     return None
 
-# Funciones de procesamiento de archivos
 def process_pdf(ruta_archivo):
     try:
         with warnings.catch_warnings(record=True) as w:
@@ -173,6 +164,27 @@ def process_file(args):
         result = None
     return ruta_archivo, result, error
 
+def organize_file(args):
+    idx, author, rutas_archivos = args
+    ruta_archivo = rutas_archivos[idx]
+    nombre_archivo = os.path.basename(ruta_archivo)
+    try:
+        if not author or author.strip() == '' or author.lower() == 'no answer':
+            nombre_autor = 'Autor Desconocido'
+        else:
+            nombre_autor = normalize_author_name(author)
+            nombre_autor = get_best_matching_author(nombre_autor)
+            nombre_autor = re.sub(r'[<>:"/\\|?*]', '', nombre_autor)
+
+        carpeta_autor = os.path.join(CARPETA_SALIDA, nombre_autor)
+
+        if not os.path.exists(carpeta_autor):
+            os.makedirs(carpeta_autor)
+
+        shutil.copy2(ruta_archivo, os.path.join(carpeta_autor, nombre_archivo))
+    except Exception as e:
+        log_error(ruta_archivo, str(e))
+
 def main():
     if not os.path.exists(CARPETA_SALIDA):
         os.makedirs(CARPETA_SALIDA)
@@ -227,7 +239,7 @@ def main():
                 continue
 
             try:
-                outputs = qa_pipeline(qa_inputs, batch_size=BATCH_SIZE)
+                outputs = tqa_pipeline(qa_inputs, batch_size=BATCH_SIZE)
                 for idx_output, output in zip(valid_indices, outputs):
                     answer = output.get('answer', None)
                     autores_extraidos[idx_output] = answer if answer else extract_author_using_ner(textos_para_procesar[idx_output])
@@ -236,25 +248,10 @@ def main():
                     log_error(rutas_archivos[idx_error], f"Error processing QA: {e}")
                     autores_extraidos[idx_error] = None
 
-    for idx, author in enumerate(tqdm(autores_extraidos, desc="Organizando archivos por autor", unit="archivo")):
-        ruta_archivo = rutas_archivos[idx]
-        nombre_archivo = os.path.basename(ruta_archivo)
-        try:
-            if not author or author.strip() == '' or author.lower() == 'no answer':
-                nombre_autor = 'Autor Desconocido'
-            else:
-                nombre_autor = normalize_author_name(author)
-                nombre_autor = get_best_matching_author(nombre_autor)
-                nombre_autor = re.sub(r'[<>:"/\\|?*]', '', nombre_autor)
-
-            carpeta_autor = os.path.join(CARPETA_SALIDA, nombre_autor)
-
-            if not os.path.exists(carpeta_autor):
-                os.makedirs(carpeta_autor)
-
-            shutil.copy2(ruta_archivo, os.path.join(carpeta_autor, nombre_archivo))
-        except Exception as e:
-            log_error(ruta_archivo, str(e))
+    with ProcessPoolExecutor(max_workers=MAX_WORKERS) as executor:
+        futures = [executor.submit(organize_file, (idx, author, rutas_archivos)) for idx, author in enumerate(autores_extraidos)]
+        for future in tqdm(as_completed(futures), total=len(futures), desc="Organizando archivos por autor", unit="archivo"):
+            future.result()
 
     with open(LOG_FILE, 'w', encoding='utf-8') as log_file:
         json.dump(log_data, log_file, indent=4, ensure_ascii=False)
