@@ -20,7 +20,10 @@ login(token="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")
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
 torch.backends.cudnn.benchmark = True
-torch.set_num_threads(6)
+if device == "cuda":
+    torch.cuda.set_per_process_memory_fraction(0.9)
+else:
+    torch.set_num_threads(os.cpu_count())
 
 qa_pipeline = pipeline(
     "question-answering",
@@ -30,9 +33,9 @@ qa_pipeline = pipeline(
 )
 
 MAX_LENGTH = 2000
-MAX_WORKERS = 10  # Reducir el número de hilos para evitar saturación y posibles errores
+MAX_WORKERS = os.cpu_count()
 LOG_FILE = 'errores_procesamiento.json'
-BATCH_SIZE = 15
+BATCH_SIZE = 55
 
 multiprocessing.set_start_method("spawn", force=True)
 
