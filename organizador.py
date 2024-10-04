@@ -109,7 +109,11 @@ def process_pdf(ruta_archivo):
         for num_pagina in range(num_paginas):
             pagina = lector.pages[num_pagina]
             try:
-                texto_pagina = pagina.extract_text()
+                with warnings.catch_warnings(record=True) as w:
+                    warnings.simplefilter("ignore")
+                    texto_pagina = pagina.extract_text()
+                    for warning in w:
+                        log_error(ruta_archivo, str(warning.message))
             except Exception as e:
                 log_error(ruta_archivo, f"Error extracting text from page {num_pagina}: {e}")
                 continue
