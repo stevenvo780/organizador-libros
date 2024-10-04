@@ -2,6 +2,7 @@ import re
 import unicodedata
 from difflib import SequenceMatcher
 import os
+from file_types import FORMATOS_ARCHIVOS
 
 log_data = {
     "archivos_error": [],
@@ -48,7 +49,7 @@ def cargar_archivos(cola_archivos, CARPETA_ENTRADA, BATCH_SIZE):
             ruta_archivo = os.path.join(root, nombre_archivo)
             if os.path.isfile(ruta_archivo):
                 ext = os.path.splitext(ruta_archivo)[1].lower()
-                if ext in ['.pdf', '.epub', '.docx', '.doc', '.rtf']:
+                if any(ext in formatos for formatos in FORMATOS_ARCHIVOS.values()):
                     archivos_para_procesar.append((ruta_archivo, ext))
                 else:
                     log_data["archivos_no_soportados"].append(ruta_archivo)

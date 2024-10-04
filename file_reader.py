@@ -9,13 +9,13 @@ import io
 from contextlib import redirect_stderr
 import pypandoc
 from utils import clean_text, log_error
+from file_types import FORMATOS_ARCHIVOS
 
 MAX_PAGES = 10
 MAX_PARAGRAPHS_PER_PAGE = 30
 MAX_EPUB_ITEMS = 50
 
 def process_pdf(ruta_archivo):
-    # Primero intentamos con pdfminer.six (generalmente más rápido)
     try:
         with io.StringIO() as buf, redirect_stderr(buf):
             texto = pdfminer_extract_text(ruta_archivo, maxpages=MAX_PAGES)
@@ -27,7 +27,6 @@ def process_pdf(ruta_archivo):
     except Exception as e:
         log_error(ruta_archivo, f"Error processing PDF with pdfminer.six: {e}")
 
-    # Intentamos con PyMuPDF (fitz)
     try:
         with io.StringIO() as buf, redirect_stderr(buf):
             with warnings.catch_warnings(record=True) as w:
@@ -47,7 +46,6 @@ def process_pdf(ruta_archivo):
     except Exception as e:
         log_error(ruta_archivo, f"Error processing PDF with PyMuPDF: {e}")
 
-    # Intentamos con PyPDF2
     try:
         with io.StringIO() as buf, redirect_stderr(buf):
             with warnings.catch_warnings(record=True) as w:
@@ -144,15 +142,15 @@ def process_rtf(ruta_archivo):
         return None, None
 
 def process_file(ruta_archivo, ext):
-    if ext in ['.pdf', '.PDF', '.pdf_']:
+    if ext in FORMATOS_ARCHIVOS['pdf']:
         return process_pdf(ruta_archivo)
-    elif ext == '.epub':
+    elif ext in FORMATOS_ARCHIVOS['epub']:
         return process_epub(ruta_archivo)
-    elif ext == '.docx':
+    elif ext in FORMATOS_ARCHIVOS['docx']:
         return process_docx(ruta_archivo)
-    elif ext in ['.doc', '.DOC']:
+    elif ext in FORMATOS_ARCHIVOS['doc']:
         return process_doc(ruta_archivo)
-    elif ext == '.rtf':
+    elif ext in FORMATOS_ARCHIVOS['rtf']:
         return process_rtf(ruta_archivo)
     else:
         log_error(ruta_archivo, f"Unsupported file type: {ext}")
