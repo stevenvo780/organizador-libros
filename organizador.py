@@ -1,30 +1,33 @@
 import os
 import shutil
 import re
+import json
+import time
+import warnings
+import gc
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from tqdm import tqdm
+from transformers import pipeline
+from huggingface_hub import login
+import torch
 from PyPDF2 import PdfReader
 from ebooklib import epub
 import docx
-from transformers import pipeline
-import warnings
-from tqdm import tqdm
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from huggingface_hub import login
-import torch
-import multiprocessing
-import gc
-import time
-import json
 
+# Login to Hugging Face (replace with your own token or use environment variable)
 login(token="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")
 
+# Determine the device to use (GPU if available)
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
+# Optimize PyTorch settings
 torch.backends.cudnn.benchmark = True
 if device == "cuda":
     torch.cuda.set_per_process_memory_fraction(0.9)
 else:
     torch.set_num_threads(os.cpu_count())
 
+# Initialize the question-answering pipeline
 qa_pipeline = pipeline(
     "question-answering",
     model="mrm8488/bert-base-spanish-wwm-cased-finetuned-spa-squad2-es",
@@ -32,73 +35,118 @@ qa_pipeline = pipeline(
     device=0 if device == "cuda" else -1
 )
 
-MAX_LENGTH = 2000
+# Constants
+MAX_LENGTH = 2000  # Max length of context text
 MAX_WORKERS = os.cpu_count()
 LOG_FILE = 'errores_procesamiento.json'
-BATCH_SIZE = 55
-
-multiprocessing.set_start_method("spawn", force=True)
+BATCH_SIZE = 16  # Adjust batch size to fit into GPU memory
 
 def process_text_with_ai(texts, qa_pipeline):
-    respuestas = []
+    """
+    Processes a list of texts with the QA pipeline to extract authors.
+    """
+    # Prepare inputs for the pipeline
+    inputs = []
     for text in texts:
-        if not text.strip():
-            respuestas.append(None)
+        if text.strip():
+            inputs.append({
+                'question': '¿Quién es el autor del libro?',
+                'context': text[:MAX_LENGTH]
+            })
+        else:
+            inputs.append(None)
+
+    # Process inputs in batches
+    resultados = []
+    for i in tqdm(range(0, len(inputs), BATCH_SIZE), desc="Procesando textos con IA", unit="batch"):
+        batch_inputs = [inp for inp in inputs[i:i+BATCH_SIZE] if inp]
+        if not batch_inputs:
+            resultados.extend([None] * (len(inputs[i:i+BATCH_SIZE])))
             continue
         try:
-            text = text[:MAX_LENGTH]
-            result = qa_pipeline(question="¿Quién es el autor del libro?", context=text)
-            respuestas.append(result.get('answer', None))
+            batch_outputs = qa_pipeline(batch_inputs, batch_size=BATCH_SIZE)
+            batch_answers = [output.get('answer', None) for output in batch_outputs]
+            # Handle the cases where inputs were None
+            idx = 0
+            for inp in inputs[i:i+BATCH_SIZE]:
+                if inp:
+                    resultados.append(batch_answers[idx])
+                    idx += 1
+                else:
+                    resultados.append(None)
         except Exception as e:
-            respuestas.append(None)
+            # In case of error, append None for each input in the batch
+            resultados.extend([None] * len(inputs[i:i+BATCH_SIZE]))
+            print(f"Error processing batch: {e}")
         finally:
-            torch.cuda.empty_cache()
+            # Clear cache to prevent memory leaks
+            if device == "cuda":
+                torch.cuda.empty_cache()
             gc.collect()
-            time.sleep(1)
-    return respuestas
+
+    return resultados
 
 def process_pdf(ruta_archivo):
-    lector = PdfReader(ruta_archivo)
-    num_paginas = min(10, len(lector.pages))
-    texto = ''
-    for num_pagina in range(num_paginas):
-        pagina = lector.pages[num_pagina]
-        try:
-            if pagina.extract_text():
-                texto += pagina.extract_text() + '\n'
-        except Exception:
-            continue
-    return texto
+    """
+    Extracts text from the first 10 pages of a PDF file.
+    """
+    try:
+        lector = PdfReader(ruta_archivo)
+        num_paginas = min(10, len(lector.pages))
+        texto = ''
+        for num_pagina in range(num_paginas):
+            pagina = lector.pages[num_pagina]
+            texto_pagina = pagina.extract_text()
+            if texto_pagina:
+                texto += texto_pagina + '\n'
+        return texto
+    except Exception as e:
+        print(f"Error processing PDF {ruta_archivo}: {e}")
+        return None
 
 def process_epub(ruta_archivo):
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
-        libro = epub.read_epub(ruta_archivo)
-    texto = ''
-    conteo = 0
-    for item in libro.get_items():
-        if item.get_type() == epub.EpubHtml:
-            try:
+    """
+    Extracts text from the first 10 items of an EPUB file.
+    """
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            libro = epub.read_epub(ruta_archivo)
+        texto = ''
+        conteo = 0
+        for item in libro.get_items():
+            if item.get_type() == epub.EpubHtml:
                 contenido = item.get_content().decode('utf-8')
                 contenido = re.sub(r'<[^>]+>', '', contenido)
                 texto += contenido + '\n'
                 conteo += 1
                 if conteo >= 10:
                     break
-            except Exception:
-                continue
-    return texto
+        return texto
+    except Exception as e:
+        print(f"Error processing EPUB {ruta_archivo}: {e}")
+        return None
 
 def process_docx(ruta_archivo):
-    documento = docx.Document(ruta_archivo)
-    texto = ''
-    parrafos_por_pagina = 30
-    num_parrafos = min(10 * parrafos_por_pagina, len(documento.paragraphs))
-    for i in range(num_parrafos):
-        texto += documento.paragraphs[i].text + '\n'
-    return texto
+    """
+    Extracts text from the first 10 pages (estimated) of a DOCX file.
+    """
+    try:
+        documento = docx.Document(ruta_archivo)
+        texto = ''
+        parrafos_por_pagina = 30  # Estimated number of paragraphs per page
+        num_parrafos = min(10 * parrafos_por_pagina, len(documento.paragraphs))
+        for i in range(num_parrafos):
+            texto += documento.paragraphs[i].text + '\n'
+        return texto
+    except Exception as e:
+        print(f"Error processing DOCX {ruta_archivo}: {e}")
+        return None
 
 def process_file(ruta_archivo):
+    """
+    Processes a file based on its extension and extracts text.
+    """
     ext = os.path.splitext(ruta_archivo)[1].lower()
     if ext == '.pdf':
         return process_pdf(ruta_archivo)
@@ -118,6 +166,7 @@ def main():
     if not os.path.exists(carpeta_salida):
         os.makedirs(carpeta_salida)
 
+    # Collect files to process
     archivos_para_procesar = []
     for root, _, files in os.walk(carpeta_entrada):
         for nombre_archivo in files:
@@ -125,28 +174,27 @@ def main():
             if os.path.isfile(ruta_archivo):
                 archivos_para_procesar.append(ruta_archivo)
 
+    # Extract texts from files using ThreadPoolExecutor
     textos_para_procesar = []
     rutas_archivos = []
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
         futures = {executor.submit(process_file, ruta_archivo): ruta_archivo for ruta_archivo in archivos_para_procesar}
         for future in tqdm(as_completed(futures), total=len(futures), desc="Extrayendo textos de archivos", unit="archivo"):
+            ruta_archivo = futures[future]
             try:
                 texto = future.result()
-                ruta_archivo = futures[future]
                 if texto is None:
                     archivos_no_soportados.append(ruta_archivo)
                 else:
                     textos_para_procesar.append(texto)
                     rutas_archivos.append(ruta_archivo)
             except Exception as e:
-                archivos_error.append((futures[future], str(e)))
+                archivos_error.append((ruta_archivo, str(e)))
 
-    resultados = []
-    for i in tqdm(range(0, len(textos_para_procesar), BATCH_SIZE), desc="Procesando textos con AI", unit="lote"):
-        batch_textos = textos_para_procesar[i:i + BATCH_SIZE]
-        batch_resultados = process_text_with_ai(batch_textos, qa_pipeline)
-        resultados.extend(batch_resultados)
+    # Process texts with AI to extract authors
+    resultados = process_text_with_ai(textos_para_procesar, qa_pipeline)
 
+    # Organize files based on authors
     for idx, autor in enumerate(resultados):
         ruta_archivo = rutas_archivos[idx]
         nombre_archivo = os.path.basename(ruta_archivo)
@@ -162,14 +210,15 @@ def main():
 
             shutil.copy2(ruta_archivo, os.path.join(carpeta_autor, nombre_archivo))
         except Exception as e:
-            archivos_error.append((nombre_archivo, str(e)))
+            archivos_error.append((ruta_archivo, str(e)))
 
+    # Write error logs to file
     log_data = {
         "archivos_error": archivos_error,
         "archivos_no_soportados": archivos_no_soportados
     }
-    with open(LOG_FILE, 'w') as log_file:
-        json.dump(log_data, log_file, indent=4)
+    with open(LOG_FILE, 'w', encoding='utf-8') as log_file:
+        json.dump(log_data, log_file, indent=4, ensure_ascii=False)
 
 if __name__ == '__main__':
     main()
