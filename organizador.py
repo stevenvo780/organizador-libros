@@ -14,8 +14,11 @@ import docx
 import unicodedata
 from difflib import SequenceMatcher
 
-login(token="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")
+# Autenticación con Hugging Face
+token = "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"
+login(token=token)
 
+# Definición de constantes
 CARPETA_ENTRADA = 'Libros'
 CARPETA_SALIDA = 'Libros_Organizados'
 LOG_FILE = 'errores_procesamiento.json'
@@ -25,28 +28,37 @@ MAX_PARAGRAPHS_PER_PAGE = 30
 MAX_EPUB_ITEMS = 10
 MAX_CHARACTERS = 15000
 BATCH_SIZE = 64
+QUESTION_AUTHOR = "¿Quién es el autor del libro?"
 
+# Configuración del dispositivo
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
+# Configuración de PyTorch
 torch.backends.cudnn.benchmark = True
 if device == "cuda":
     torch.cuda.set_per_process_memory_fraction(0.9)
 else:
     torch.set_num_threads(os.cpu_count())
 
-qa_pipeline = pipeline(
+# Inicialización del pipeline para question-answering
+tqa_pipeline = pipeline(
     "question-answering",
-    model="bert-base-multilingual-cased",
-    tokenizer="bert-base-multilingual-cased",
+    model="mrm8488/bert-base-spanish-wwm-cased-finetuned-spa-squad2-es",
+    tokenizer="mrm8488/bert-base-spanish-wwm-cased-finetuned-spa-squad2-es",
     device=0 if device == "cuda" else -1
 )
 
+# Inicialización del pipeline para Named Entity Recognition (NER)
+ner_pipeline = pipeline("ner", model="dccuchile/bert-base-spanish-wwm-cased-finetuned-ner")
+
+# Variables globales para manejo de errores y autores conocidos
 known_authors = set()
 log_data = {
     "archivos_error": [],
     "archivos_no_soportados": []
 }
 
+# Funciones auxiliares
 def log_error(ruta_archivo, mensaje):
     log_data["archivos_error"].append({"archivo": ruta_archivo, "error": mensaje})
 
@@ -81,6 +93,14 @@ def get_best_matching_author(name):
         known_authors.add(name)
         return name
 
+def extract_author_using_ner(text):
+    ner_results = ner_pipeline(text)
+    author_candidates = [entity['word'] for entity in ner_results if entity['entity'] == 'B-PER']
+    if author_candidates:
+        return ' '.join(author_candidates)
+    return None
+
+# Funciones de procesamiento de archivos
 def process_pdf(ruta_archivo):
     try:
         with warnings.catch_warnings(record=True) as w:
@@ -181,7 +201,7 @@ def main():
                 if result is not None:
                     textos_para_procesar.append(result)
                     rutas_archivos.append(ruta_archivo)
-                    autores_extraidos.append(None)
+                    autores_extraidos.append(error)
             except Exception as e:
                 log_error(ruta_archivo, str(e))
 
@@ -200,7 +220,7 @@ def main():
                 if not context:
                     log_error(rutas_archivos[idx], "Contexto vacío, no se puede extraer autor")
                     continue
-                qa_inputs.append({'context': context, 'question': '¿Quién es el autor del libro?'})
+                qa_inputs.append({'context': context, 'question': QUESTION_AUTHOR})
                 valid_indices.append(idx)
 
             if not qa_inputs:
@@ -210,7 +230,7 @@ def main():
                 outputs = qa_pipeline(qa_inputs, batch_size=BATCH_SIZE)
                 for idx_output, output in zip(valid_indices, outputs):
                     answer = output.get('answer', None)
-                    autores_extraidos[idx_output] = answer
+                    autores_extraidos[idx_output] = answer if answer else extract_author_using_ner(textos_para_procesar[idx_output])
             except Exception as e:
                 for idx_error in valid_indices:
                     log_error(rutas_archivos[idx_error], f"Error processing QA: {e}")
