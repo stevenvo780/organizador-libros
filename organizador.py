@@ -18,10 +18,10 @@ from dotenv import load_dotenv
 load_dotenv()
 
 token = os.getenv("HUGGINGFACE_TOKEN")
-login(token=token)
+login(token=token, add_to_git_credential=True)
 
-#CARPETA_ENTRADA = '/mnt/FASTDATA/LibrosBiblioteca'
-CARPETA_ENTRADA = 'Libros'
+CARPETA_ENTRADA = '/mnt/FASTDATA/LibrosBiblioteca'
+#CARPETA_ENTRADA = 'Libros'
 CARPETA_SALIDA = 'Libros_Organizados'
 LOG_FILE = 'errores_procesamiento.json'
 MAX_WORKERS = os.cpu_count()
@@ -44,10 +44,11 @@ tqa_pipeline = pipeline(
     "question-answering",
     model="mrm8488/bert-base-spanish-wwm-cased-finetuned-spa-squad2-es",
     tokenizer="mrm8488/bert-base-spanish-wwm-cased-finetuned-spa-squad2-es",
-    device=0 if device == "cuda" else -1
+    device=0 if device == "cuda" else -1,
+    clean_up_tokenization_spaces=False
 )
 
-ner_pipeline = pipeline("ner", model="dccuchile/bert-base-spanish-wwm-cased-finetuned-ner")
+ner_pipeline = pipeline("ner", model="dccuchile/bert-base-spanish-wwm-cased-finetuned-ner", device=0 if device == "cuda" else -1)
 
 known_authors = set()
 log_data = {
@@ -107,7 +108,11 @@ def process_pdf(ruta_archivo):
         texto = ''
         for num_pagina in range(num_paginas):
             pagina = lector.pages[num_pagina]
-            texto_pagina = pagina.extract_text()
+            try:
+                texto_pagina = pagina.extract_text()
+            except Exception as e:
+                log_error(ruta_archivo, f"Error extracting text from page {num_pagina}: {e}")
+                continue
             if texto_pagina:
                 texto += texto_pagina + '\n'
         info = lector.metadata
