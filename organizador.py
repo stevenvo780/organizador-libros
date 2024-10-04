@@ -13,6 +13,8 @@ from PyPDF2 import PdfReader
 from ebooklib import epub
 import docx
 from datasets import Dataset
+from difflib import get_close_matches
+import unicodedata
 
 login(token="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")
 
@@ -31,14 +33,58 @@ qa_pipeline = pipeline(
     device=0 if device == "cuda" else -1
 )
 
-MAX_LENGTH = 2000
+ner_pipeline = pipeline(
+    "ner",
+    model="dslim/bert-base-NER",
+    tokenizer="dslim/bert-base-NER",
+    aggregation_strategy="simple",
+    device=0 if device == "cuda" else -1
+)
+
+MAX_LENGTH = 8000
 MAX_WORKERS = os.cpu_count()
 LOG_FILE = 'errores_procesamiento.json'
-BATCH_SIZE = 16
+BATCH_SIZE = 64
+
+known_authors = set()
 
 def clean_text(text):
     text = text.encode('utf-8', 'ignore').decode('utf-8', 'ignore')
     return text
+
+def normalize_author_name(name):
+    name = name.lower()
+    name = ''.join(
+        c for c in unicodedata.normalize('NFD', name)
+        if unicodedata.category(c) != 'Mn'
+    )
+    name = re.sub(r'[^a-z\s]', '', name)
+    name = ' '.join(name.split())
+    return name
+
+def get_best_matching_author(name):
+    matches = get_close_matches(name, known_authors, cutoff=0.8)
+    if matches:
+        return matches[0]
+    else:
+        known_authors.add(name)
+        return name
+
+def extract_author_name(text):
+    patterns = [
+        r'Autor[:\s]+([A-ZÁÉÍÓÚÑ][a-záéíóúñ]+(?:\s[A-ZÁÉÍÓÚÑ][a-záéíóúñ]+)+)',
+        r'Escrito por[:\s]+([A-ZÁÉÍÓÚÑ][a-záéíóúñ]+(?:\s[A-ZÁÉÍÓÚÑ][a-záéíóúñ]+)+)'
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, text)
+        if match:
+            return match.group(1)
+
+    entities = ner_pipeline(text)
+    for entity in entities:
+        if entity['entity_group'] == 'PER':
+            return entity['word']
+    return None
 
 def process_pdf(ruta_archivo):
     try:
@@ -162,10 +208,13 @@ def main():
         nombre_archivo = os.path.basename(ruta_archivo)
         try:
             if not autor or autor.strip() == '' or autor.lower() == 'no answer':
-                carpeta_autor = os.path.join(carpeta_salida, 'Autor_Desconocido')
+                nombre_autor = 'Autor Desconocido'
             else:
-                nombre_autor = re.sub(r'[<>:"/\\|?*]', '', autor)
-                carpeta_autor = os.path.join(carpeta_salida, nombre_autor)
+                nombre_autor = normalize_author_name(autor)
+                nombre_autor = get_best_matching_author(nombre_autor)
+                nombre_autor = re.sub(r'[<>:"/\\|?*]', '', nombre_autor)
+
+            carpeta_autor = os.path.join(carpeta_salida, nombre_autor)
 
             if not os.path.exists(carpeta_autor):
                 os.makedirs(carpeta_autor)
