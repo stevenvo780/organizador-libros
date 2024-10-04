@@ -12,7 +12,7 @@ from utils import clean_text, log_error
 
 MAX_PAGES = 10
 MAX_PARAGRAPHS_PER_PAGE = 30
-MAX_EPUB_ITEMS = 10
+MAX_EPUB_ITEMS = 50
 
 def process_pdf(ruta_archivo):
     # Primero intentamos con pdfminer.six (generalmente más rápido)
