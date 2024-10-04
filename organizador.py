@@ -2,10 +2,9 @@ import os
 import shutil
 import re
 import json
-import time
 import warnings
 import gc
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from tqdm import tqdm
 from transformers import pipeline
 from huggingface_hub import login
@@ -41,7 +40,7 @@ MAX_WORKERS = os.cpu_count()
 LOG_FILE = 'errores_procesamiento.json'
 BATCH_SIZE = 16  # Adjust batch size to fit into GPU memory
 
-def process_text_with_ai(texts, qa_pipeline):
+def process_text_with_ai(texts):
     """
     Processes a list of texts with the QA pipeline to extract authors.
     """
@@ -56,15 +55,17 @@ def process_text_with_ai(texts, qa_pipeline):
         else:
             inputs.append(None)
 
-    # Process inputs in batches
+    # Process inputs in batches with progress bar
     resultados = []
     for i in tqdm(range(0, len(inputs), BATCH_SIZE), desc="Procesando textos con IA", unit="batch"):
         batch_inputs = [inp for inp in inputs[i:i+BATCH_SIZE] if inp]
         if not batch_inputs:
-            resultados.extend([None] * (len(inputs[i:i+BATCH_SIZE])))
+            resultados.extend([None] * len(inputs[i:i+BATCH_SIZE]))
             continue
         try:
             batch_outputs = qa_pipeline(batch_inputs, batch_size=BATCH_SIZE)
+            if not isinstance(batch_outputs, list):
+                batch_outputs = [batch_outputs]
             batch_answers = [output.get('answer', None) for output in batch_outputs]
             # Handle the cases where inputs were None
             idx = 0
@@ -101,8 +102,7 @@ def process_pdf(ruta_archivo):
                 texto += texto_pagina + '\n'
         return texto
     except Exception as e:
-        print(f"Error processing PDF {ruta_archivo}: {e}")
-        return None
+        return f"Error processing PDF {ruta_archivo}: {e}"
 
 def process_epub(ruta_archivo):
     """
@@ -124,8 +124,7 @@ def process_epub(ruta_archivo):
                     break
         return texto
     except Exception as e:
-        print(f"Error processing EPUB {ruta_archivo}: {e}")
-        return None
+        return f"Error processing EPUB {ruta_archivo}: {e}"
 
 def process_docx(ruta_archivo):
     """
@@ -140,22 +139,23 @@ def process_docx(ruta_archivo):
             texto += documento.paragraphs[i].text + '\n'
         return texto
     except Exception as e:
-        print(f"Error processing DOCX {ruta_archivo}: {e}")
-        return None
+        return f"Error processing DOCX {ruta_archivo}: {e}"
 
-def process_file(ruta_archivo):
+def process_file(args):
     """
     Processes a file based on its extension and extracts text.
+    Returns a tuple (ruta_archivo, texto extraído o mensaje de error)
     """
-    ext = os.path.splitext(ruta_archivo)[1].lower()
+    ruta_archivo, ext = args
     if ext == '.pdf':
-        return process_pdf(ruta_archivo)
+        result = process_pdf(ruta_archivo)
     elif ext == '.epub':
-        return process_epub(ruta_archivo)
+        result = process_epub(ruta_archivo)
     elif ext == '.docx':
-        return process_docx(ruta_archivo)
+        result = process_docx(ruta_archivo)
     else:
-        return None
+        result = None  # Unsupported file type
+    return ruta_archivo, result
 
 def main():
     carpeta_entrada = 'Libros'
@@ -172,27 +172,32 @@ def main():
         for nombre_archivo in files:
             ruta_archivo = os.path.join(root, nombre_archivo)
             if os.path.isfile(ruta_archivo):
-                archivos_para_procesar.append(ruta_archivo)
+                ext = os.path.splitext(ruta_archivo)[1].lower()
+                if ext in ['.pdf', '.epub', '.docx']:
+                    archivos_para_procesar.append((ruta_archivo, ext))
+                else:
+                    archivos_no_soportados.append(ruta_archivo)
 
-    # Extract texts from files using ThreadPoolExecutor
+    # Extract texts from files using ProcessPoolExecutor
     textos_para_procesar = []
     rutas_archivos = []
-    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-        futures = {executor.submit(process_file, ruta_archivo): ruta_archivo for ruta_archivo in archivos_para_procesar}
+    with ProcessPoolExecutor(max_workers=MAX_WORKERS) as executor:
+        futures = {executor.submit(process_file, args): args[0] for args in archivos_para_procesar}
         for future in tqdm(as_completed(futures), total=len(futures), desc="Extrayendo textos de archivos", unit="archivo"):
             ruta_archivo = futures[future]
             try:
-                texto = future.result()
-                if texto is None:
-                    archivos_no_soportados.append(ruta_archivo)
+                ruta_archivo, result = future.result()
+                if result is None or result.startswith("Error processing"):
+                    archivos_error.append((ruta_archivo, result))
                 else:
-                    textos_para_procesar.append(texto)
+                    textos_para_procesar.append(result)
                     rutas_archivos.append(ruta_archivo)
             except Exception as e:
                 archivos_error.append((ruta_archivo, str(e)))
 
     # Process texts with AI to extract authors
-    resultados = process_text_with_ai(textos_para_procesar, qa_pipeline)
+    print("Procesando textos con IA...")
+    resultados = process_text_with_ai(textos_para_procesar)
 
     # Organize files based on authors
     for idx, autor in enumerate(resultados):
