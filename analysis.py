@@ -1,6 +1,7 @@
 import torch
 from transformers import pipeline
 from utils import log_error
+from file_types import RESPUESTA_IA_NO_ENCONTRADA
 
 QUESTION_AUTHOR = "¿Quién es el autor del libro?"
 MAX_CHARACTERS = 15000
@@ -37,7 +38,7 @@ def extract_authors_batch(text, author, ruta_archivo, batch_size):
 
     try:
         answer = tqa_pipeline(qa_inputs, batch_size=batch_size)[0].get('answer', None)
-        if answer and answer.lower() not in ['no sé', 'no answer']:
+        if answer and answer.lower() not in RESPUESTA_IA_NO_ENCONTRADA:
             return answer
     except Exception as e:
         log_error(ruta_archivo, f"Error processing QA: {e}")
