@@ -13,6 +13,7 @@ import torch
 import multiprocessing
 import gc
 import time
+import json
 
 # Autenticación en Hugging Face
 login(token="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")
@@ -33,19 +34,21 @@ qa_pipeline = pipeline(
 )
 
 MAX_LENGTH = 1000  # Límite de caracteres para el contexto
-MAX_WORKERS = 164  # Límite de hilos para el ThreadPoolExecutor
+MAX_WORKERS = 2  # Límite de hilos para el ThreadPoolExecutor
+LOG_FILE = 'errores_procesamiento.json'  # Archivo para registrar errores
 
 # Cambiar el método de inicio de los procesos a 'spawn' para evitar errores con CUDA
 multiprocessing.set_start_method("spawn", force=True)
 
 def process_text_with_ai(text, qa_pipeline):
+    if not text.strip():
+        return None  # Si el contexto está vacío, devolver None directamente
     try:
         text = text[:MAX_LENGTH]
         result = qa_pipeline(question="¿Quién es el autor del libro?", context=text)
         return result.get('answer', None)
     except Exception as e:
-        print(f"Error al procesar texto con AI: {e}")
-        return None
+        return None  # Devolver None y registrar el error en el log general
     finally:
         # Liberar memoria de GPU
         torch.cuda.empty_cache()
@@ -62,8 +65,7 @@ def process_pdf(ruta_archivo, qa_pipeline):
         try:
             if pagina.extract_text():
                 texto += pagina.extract_text() + '\n'
-        except Exception as e:
-            print(f"Error al extraer texto de la página {num_pagina} del PDF: {e}")
+        except Exception:
             continue
     return process_text_with_ai(texto, qa_pipeline)
 
@@ -83,8 +85,7 @@ def process_epub(ruta_archivo, qa_pipeline):
                 conteo += 1
                 if conteo >= 10:
                     break
-            except Exception as e:
-                print(f"Error al procesar contenido EPUB: {e}")
+            except Exception:
                 continue
     return process_text_with_ai(texto, qa_pipeline)
 
@@ -155,16 +156,13 @@ def main():
             archivos_error.extend(errores)
             archivos_no_soportados.extend(no_soportados)
 
-    if archivos_error:
-        print("Ocurrieron errores con los siguientes archivos:")
-        for fname, error in archivos_error:
-            print(f"{fname}: {error}")
-
-    if archivos_no_soportados:
-        print("Los siguientes archivos tienen formatos no soportados:")
-        for fname in archivos_no_soportados:
-            print(fname)
-
+    # Guardar errores en un archivo JSON
+    log_data = {
+        "archivos_error": archivos_error,
+        "archivos_no_soportados": archivos_no_soportados
+    }
+    with open(LOG_FILE, 'w') as log_file:
+        json.dump(log_data, log_file, indent=4)
 
 if __name__ == '__main__':
     main()
