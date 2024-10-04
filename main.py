@@ -16,7 +16,7 @@ CARPETA_ENTRADA = '/mnt/FASTDATA/LibrosBiblioteca'
 CARPETA_SALIDA = 'Libros_Organizados'
 LOG_FILE = 'errores_procesamiento.json'
 MAX_WORKERS = os.cpu_count()
-BATCH_SIZE = 64  # Unificado en todos los procesos
+BATCH_SIZE = 64
 
 def procesar_archivos(cola_archivos, cola_analisis, total_archivos):
     with ProcessPoolExecutor(max_workers=MAX_WORKERS) as executor:
