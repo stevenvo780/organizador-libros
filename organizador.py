@@ -11,8 +11,8 @@ import torch
 from PyPDF2 import PdfReader
 from ebooklib import epub
 import docx
-from difflib import get_close_matches
 import unicodedata
+from difflib import SequenceMatcher
 
 # Constantes
 login(token="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")
@@ -42,20 +42,8 @@ qa_pipeline = pipeline(
     device=0 if device == "cuda" else -1
 )
 
-ner_pipeline = pipeline(
-    "ner",
-    model="mrm8488/bert-spanish-cased-finetuned-ner",
-    tokenizer="mrm8488/bert-spanish-cased-finetuned-ner",
-    aggregation_strategy="simple",
-    device=0 if device == "cuda" else -1
-)
-
-# Obtener la longitud máxima permitida por los modelos
+# Obtener la longitud máxima permitida por el modelo
 MAX_LENGTH_QA = qa_pipeline.tokenizer.model_max_length
-MAX_LENGTH_NER = ner_pipeline.tokenizer.model_max_length
-
-# Usar la longitud máxima mínima entre los dos modelos
-MAX_LENGTH = min(MAX_LENGTH_QA, MAX_LENGTH_NER)
 
 known_authors = set()
 
@@ -77,55 +65,22 @@ def normalize_author_name(name):
     return name
 
 def get_best_matching_author(name):
-    matches = get_close_matches(name, known_authors, cutoff=0.8)
-    if matches:
-        return matches[0]
+    def similarity(a, b):
+        return SequenceMatcher(None, a, b).ratio()
+
+    best_match = None
+    highest_similarity = 0.0
+    for known_author in known_authors:
+        sim = similarity(name, known_author)
+        if sim > highest_similarity:
+            highest_similarity = sim
+            best_match = known_author
+
+    if highest_similarity > 0.8:
+        return best_match
     else:
         known_authors.add(name)
         return name
-
-def chunk_text(text, tokenizer, max_length):
-    tokens = tokenizer.encode(text, add_special_tokens=False)
-    num_tokens = len(tokens)
-    for i in range(0, num_tokens, max_length):
-        token_chunk = tokens[i:i+max_length]
-        decoded_chunk = tokenizer.decode(token_chunk, skip_special_tokens=True)
-        yield decoded_chunk
-
-def extract_author_name(text):
-    patterns = [
-        r'(?i)Autor[:\s]+([A-ZÁÉÍÓÚÜÑa-záéíóúüñ]+(?:\s[A-ZÁÉÍÓÚÜÑa-záéíóúüñ]+)+)',
-        r'(?i)Escrito por[:\s]+([A-ZÁÉÍÓÚÜÑa-záéíóúüñ]+(?:\s[A-ZÁÉÍÓÚÜÑa-záéíóúüñ]+)+)',
-        r'(?i)Por[:\s]+([A-ZÁÉÍÓÚÜÑa-záéíóúüñ]+(?:\s[A-ZÁÉÍÓÚÜÑa-záéíóúüñ]+)+)',
-        r'(?i)Autor\([^\)]+\):\s*([^\n]+)',
-        r'(?i)Autor[^\n]+:\s*([^\n]+)',
-        r'(?i)Escrito por[^\n]+:\s*([^\n]+)',
-        r'(?i)Por[^\n]+:\s*([^\n]+)',
-        r'(?i)Autor[:\s]+([A-ZÁÉÍÓÚÜÑa-záéíóúüñ]+)',
-        r'(?i)Escrito por[:\s]+([A-ZÁÉÍÓÚÜÑa-záéíóúüñ]+)',
-        r'(?i)Por[:\s]+([A-ZÁÉÍÓÚÜÑa-záéíóúüñ]+)',
-        r'(?i)Por\([^\)]+\):\s*([^\n]+)',
-        r'(?i)Escrito por\([^\)]+\):\s*([^\n]+)',
-        r'(?i)Traducido por[:\s]+([A-ZÁÉÍÓÚÜÑa-záéíóúüñ]+(?:\s[A-ZÁÉÍÓÚÜÑa-záéíóúüñ]+)+)',
-        r'(?i)Traducido por[:\s]+([A-ZÁÉÍÓÚÜÑa-záéíóúüñ]+)',
-        r'(?i)Traducido por\([^\)]+\):\s*([^\n]+)',
-        r'(?i)Traducido por[^\n]+:\s*([^\n]+)'
-    ]
-    for pattern in patterns:
-        match = re.search(pattern, text)
-        if match:
-            return match.group(1).strip()
-
-    # Use NER to find person entities
-    for chunk in chunk_text(text, ner_pipeline.tokenizer, MAX_LENGTH_NER):
-        try:
-            entities = ner_pipeline(chunk)
-            for entity in entities:
-                if entity['entity_group'] == 'PER':
-                    return entity['word']
-        except Exception:
-            continue
-    return None
 
 def process_pdf(ruta_archivo):
     try:
@@ -219,22 +174,20 @@ def main():
 
     authors = []
     for idx, text in enumerate(tqdm(textos_para_procesar, desc="Extrayendo autores", unit="archivo")):
-        author = extract_author_name(text)
-        if not author:
-            # Limit the context to the first MAX_CHARACTERS characters
-            context = text[:MAX_CHARACTERS]
-            try:
-                # Ensure the context is within tokenizer limits
-                context_tokens = qa_pipeline.tokenizer.encode(context, add_special_tokens=False)
-                if len(context_tokens) > MAX_LENGTH_QA:
-                    context_tokens = context_tokens[:MAX_LENGTH_QA]
-                context = qa_pipeline.tokenizer.decode(context_tokens, skip_special_tokens=True)
-                qa_input = {'context': context, 'question': '¿Quién es el autor del libro?'}
-                output = qa_pipeline(**qa_input)
-                author = output.get('answer', None)
-            except Exception as e:
-                author = None
-                archivos_error.append((rutas_archivos[idx], f"Error processing QA: {e}"))
+        # Limit the context to the first MAX_CHARACTERS characters
+        context = text[:MAX_CHARACTERS]
+        try:
+            # Ensure the context is within tokenizer limits
+            context_tokens = qa_pipeline.tokenizer.encode(context, add_special_tokens=False)
+            if len(context_tokens) > MAX_LENGTH_QA:
+                context_tokens = context_tokens[:MAX_LENGTH_QA]
+            context = qa_pipeline.tokenizer.decode(context_tokens, skip_special_tokens=True)
+            qa_input = {'context': context, 'question': '¿Cuál es el nombre completo del autor del libro?'}
+            output = qa_pipeline(**qa_input)
+            author = output.get('answer', None)
+        except Exception as e:
+            author = None
+            archivos_error.append((rutas_archivos[idx], f"Error processing QA: {e}"))
         authors.append(author)
 
     for idx, author in enumerate(tqdm(authors, desc="Organizando archivos por autor", unit="archivo")):
