@@ -7,7 +7,8 @@ from dotenv import load_dotenv
 
 from analysis import extract_authors_batch
 from file_reader import process_file
-from organizer import organize_file, log_data, log_error
+from organizer import organize_file
+from utils import log_data, log_error
 
 load_dotenv()
 
