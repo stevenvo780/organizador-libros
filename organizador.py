@@ -12,6 +12,7 @@ import torch
 from PyPDF2 import PdfReader
 from ebooklib import epub
 import docx
+from datasets import Dataset
 
 # Login to Hugging Face (replace with your own token or use environment variable)
 login(token="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")
@@ -40,52 +41,13 @@ MAX_WORKERS = os.cpu_count()
 LOG_FILE = 'errores_procesamiento.json'
 BATCH_SIZE = 16  # Adjust batch size to fit into GPU memory
 
-def process_text_with_ai(texts):
+def clean_text(text):
     """
-    Processes a list of texts with the QA pipeline to extract authors.
+    Cleans text to remove any invalid characters that may cause UnicodeEncodeError.
     """
-    # Prepare inputs for the pipeline
-    inputs = []
-    for text in texts:
-        if text.strip():
-            inputs.append({
-                'question': '¿Quién es el autor del libro?',
-                'context': text[:MAX_LENGTH]
-            })
-        else:
-            inputs.append(None)
-
-    # Process inputs in batches with progress bar
-    resultados = []
-    for i in tqdm(range(0, len(inputs), BATCH_SIZE), desc="Procesando textos con IA", unit="batch"):
-        batch_inputs = [inp for inp in inputs[i:i+BATCH_SIZE] if inp]
-        if not batch_inputs:
-            resultados.extend([None] * len(inputs[i:i+BATCH_SIZE]))
-            continue
-        try:
-            batch_outputs = qa_pipeline(batch_inputs, batch_size=BATCH_SIZE)
-            if not isinstance(batch_outputs, list):
-                batch_outputs = [batch_outputs]
-            batch_answers = [output.get('answer', None) for output in batch_outputs]
-            # Handle the cases where inputs were None
-            idx = 0
-            for inp in inputs[i:i+BATCH_SIZE]:
-                if inp:
-                    resultados.append(batch_answers[idx])
-                    idx += 1
-                else:
-                    resultados.append(None)
-        except Exception as e:
-            # In case of error, append None for each input in the batch
-            resultados.extend([None] * len(inputs[i:i+BATCH_SIZE]))
-            print(f"Error processing batch: {e}")
-        finally:
-            # Clear cache to prevent memory leaks
-            if device == "cuda":
-                torch.cuda.empty_cache()
-            gc.collect()
-
-    return resultados
+    # Replace surrogate characters with a space
+    text = text.encode('utf-8', 'ignore').decode('utf-8', 'ignore')
+    return text
 
 def process_pdf(ruta_archivo):
     """
@@ -100,7 +62,7 @@ def process_pdf(ruta_archivo):
             texto_pagina = pagina.extract_text()
             if texto_pagina:
                 texto += texto_pagina + '\n'
-        return texto
+        return clean_text(texto)
     except Exception as e:
         return f"Error processing PDF {ruta_archivo}: {e}"
 
@@ -122,7 +84,7 @@ def process_epub(ruta_archivo):
                 conteo += 1
                 if conteo >= 10:
                     break
-        return texto
+        return clean_text(texto)
     except Exception as e:
         return f"Error processing EPUB {ruta_archivo}: {e}"
 
@@ -137,7 +99,7 @@ def process_docx(ruta_archivo):
         num_parrafos = min(10 * parrafos_por_pagina, len(documento.paragraphs))
         for i in range(num_parrafos):
             texto += documento.paragraphs[i].text + '\n'
-        return texto
+        return clean_text(texto)
     except Exception as e:
         return f"Error processing DOCX {ruta_archivo}: {e}"
 
@@ -195,9 +157,31 @@ def main():
             except Exception as e:
                 archivos_error.append((ruta_archivo, str(e)))
 
-    # Process texts with AI to extract authors
+    # Prepare dataset for batch processing with AI
+    cleaned_texts = [clean_text(text) for text in textos_para_procesar]
+    dataset = Dataset.from_dict({
+        'context': cleaned_texts,
+        'question': ['¿Quién es el autor del libro?'] * len(cleaned_texts)
+    })
+
+    # Process texts with AI using dataset and batch mode
     print("Procesando textos con IA...")
-    resultados = process_text_with_ai(textos_para_procesar)
+    resultados = []
+    for i in tqdm(range(0, len(dataset), BATCH_SIZE), desc="Procesando textos con IA", unit="batch"):
+        batch = dataset.select(range(i, min(i + BATCH_SIZE, len(dataset))))
+        try:
+            batch_results = qa_pipeline(batch.to_pandas().to_dict(orient="records"), batch_size=BATCH_SIZE)
+            if not isinstance(batch_results, list):
+                batch_results = [batch_results]
+            batch_answers = [output.get('answer', None) for output in batch_results]
+            resultados.extend(batch_answers)
+        except Exception as e:
+            resultados.extend([None] * len(batch))
+            print(f"Error processing batch: {e}")
+        finally:
+            if device == "cuda":
+                torch.cuda.empty_cache()
+            gc.collect()
 
     # Organize files based on authors
     for idx, autor in enumerate(resultados):
