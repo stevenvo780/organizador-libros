@@ -13,7 +13,7 @@ from file_types import FORMATOS_ARCHIVOS
 
 MAX_PAGES = 10
 MAX_PARAGRAPHS_PER_PAGE = 30
-MAX_EPUB_ITEMS = 50
+MAX_EPUB_ITEMS = 10
 
 def process_pdf(ruta_archivo):
     try:

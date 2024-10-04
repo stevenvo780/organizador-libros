@@ -20,7 +20,6 @@ BATCH_SIZE = 64
 
 def procesar_archivos(cola_archivos, cola_analisis, total_archivos):
     with ProcessPoolExecutor(max_workers=MAX_WORKERS) as executor:
-        processed_files = 0
         with tqdm(total=total_archivos, desc="Extrayendo texto de archivos", unit="archivo") as pbar:
             while True:
                 batch_archivos = cola_archivos.get()
@@ -45,14 +44,12 @@ def procesar_archivos(cola_archivos, cola_analisis, total_archivos):
                             log_error(ruta_archivo, "No se pudo extraer texto del archivo.")
                     except Exception as e:
                         log_error(ruta_archivo, str(e))
-                    processed_files += 1
                     pbar.update(1)
 
                 if len(textos_para_procesar) > 0:
                     cola_analisis.put((textos_para_procesar, autores_extraidos, rutas_archivos))
 
 def analizar_autores(cola_analisis, cola_organizacion, total_archivos):
-    processed_authors = 0
     with tqdm(total=total_archivos, desc="Analizando autores", unit="archivo") as pbar:
         while True:
             batch_data = cola_analisis.get()
@@ -68,12 +65,9 @@ def analizar_autores(cola_analisis, cola_organizacion, total_archivos):
             ))
 
             cola_organizacion.put((rutas_archivos, batch_autores))
-
-            processed_authors += len(rutas_archivos)
             pbar.update(len(rutas_archivos))
 
 def organizar_archivos(cola_organizacion, known_authors, total_archivos):
-    organized_files = 0
     with ProcessPoolExecutor(max_workers=MAX_WORKERS) as executor:
         with tqdm(total=total_archivos, desc="Organizando archivos", unit="archivo") as pbar:
             while True:
@@ -87,7 +81,6 @@ def organizar_archivos(cola_organizacion, known_authors, total_archivos):
 
                 for futuro in as_completed(futuros):
                     futuro.result()
-                    organized_files += 1
                     pbar.update(1)
 
 def main():
@@ -103,6 +96,7 @@ def main():
 
     thread_cargar = Thread(target=cargar_archivos, args=(cola_archivos, CARPETA_ENTRADA, BATCH_SIZE))
     thread_cargar.start()
+
     total_archivos = cargar_archivos(cola_archivos, CARPETA_ENTRADA, BATCH_SIZE)
 
     thread_procesar = Thread(target=procesar_archivos, args=(cola_archivos, cola_analisis, total_archivos))
@@ -124,7 +118,7 @@ def main():
     with open(LOG_FILE, 'w', encoding='utf-8') as log_file:
         json.dump(log_data, log_file, indent=4, ensure_ascii=False)
 
-    print("Terminé")
+    print("Procesamiento terminado")
 
 if __name__ == '__main__':
     main()
