@@ -1,6 +1,5 @@
 import torch
 from transformers import pipeline
-from difflib import SequenceMatcher
 from utils import log_error
 
 QUESTION_AUTHOR = "¿Quién es el autor del libro?"
@@ -32,30 +31,22 @@ def extract_author_using_ner(text):
         return ' '.join(author_candidates)
     return None
 
-def extract_authors_batch(texts, autores_extraidos, rutas_archivos):
-    indices_sin_autor = [i for i, autor in enumerate(autores_extraidos) if not autor]
-    if indices_sin_autor:
-        for batch_start in range(0, len(indices_sin_autor), BATCH_SIZE):
-            batch_indices = indices_sin_autor[batch_start:batch_start + BATCH_SIZE]
-            batch_texts = [texts[i] for i in batch_indices]
+def extract_authors_batch(text, author, ruta_archivo):
+    if author:
+        return author
+    
+    qa_inputs = {'context': text[:MAX_CHARACTERS].strip(), 'question': QUESTION_AUTHOR}
 
-            qa_inputs = []
-            valid_indices = []
-            for idx, text in zip(batch_indices, batch_texts):
-                context = text[:MAX_CHARACTERS].strip()
-                if not context:
-                    log_error(rutas_archivos[idx], "Contexto vacío, no se puede extraer autor")
-                    continue
-                qa_inputs.append({'context': context, 'question': QUESTION_AUTHOR})
-                valid_indices.append(idx)
+    try:
+        answer = tqa_pipeline(qa_inputs, batch_size=1)[0].get('answer', None)
+        if answer and answer.lower() not in ['no sé', 'no answer']:
+            return answer
+    except Exception as e:
+        log_error(ruta_archivo, f"Error processing QA: {e}")
 
-            try:
-                outputs = tqa_pipeline(qa_inputs, batch_size=BATCH_SIZE)
-                for idx_output, output in zip(valid_indices, outputs):
-                    answer = output.get('answer', None)
-                    autores_extraidos[idx_output] = answer if answer else extract_author_using_ner(texts[idx_output])
-            except Exception as e:
-                for idx_error in valid_indices:
-                    log_error(rutas_archivos[idx_error], f"Error processing QA: {e}")
-                    autores_extraidos[idx_error] = None
-    return autores_extraidos
+    author_from_ner = extract_author_using_ner(text)
+    if author_from_ner:
+        return author_from_ner
+    
+    log_error(ruta_archivo, "No se pudo determinar el autor.")
+    return None
