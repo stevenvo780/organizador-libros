@@ -1,7 +1,7 @@
 import torch
 from transformers import pipeline
-from organizer import log_error
 from difflib import SequenceMatcher
+from utils import log_error
 
 QUESTION_AUTHOR = "¿Quién es el autor del libro?"
 MAX_CHARACTERS = 15000

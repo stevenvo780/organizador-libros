@@ -1,24 +1,19 @@
-# file_reader.py
-
-import fitz  # PyMuPDF
+import fitz
 from PyPDF2 import PdfReader
 import warnings
 import docx
 from ebooklib import epub
 import re
 import io
-import sys
 from contextlib import redirect_stderr
-from organizer import clean_text, log_error
+from utils import clean_text, log_error
 
 MAX_PAGES = 10
 MAX_PARAGRAPHS_PER_PAGE = 30
 MAX_EPUB_ITEMS = 10
 
 def process_pdf(ruta_archivo):
-    # Intentar primero con PyMuPDF
     try:
-        # Redirigir stderr para capturar mensajes de error de C/C++
         with io.StringIO() as buf, redirect_stderr(buf):
             with warnings.catch_warnings(record=True) as w:
                 warnings.simplefilter("ignore")
@@ -29,7 +24,6 @@ def process_pdf(ruta_archivo):
                     texto += pagina.get_text() + "\n"
                 info = documento.metadata
                 author = info.get('author', None) if info else None
-            # Capturar advertencias y errores
             stderr_output = buf.getvalue()
             if stderr_output:
                 log_error(ruta_archivo, f"PyMuPDF stderr: {stderr_output}")
@@ -39,7 +33,6 @@ def process_pdf(ruta_archivo):
     except Exception as e:
         log_error(ruta_archivo, f"Error processing PDF with PyMuPDF: {e}")
 
-    # Si falla, intentamos con PyPDF2
     try:
         with io.StringIO() as buf, redirect_stderr(buf):
             with warnings.catch_warnings(record=True) as w:
@@ -58,7 +51,6 @@ def process_pdf(ruta_archivo):
                         continue
                 info = lector.metadata
                 author = info.get('/Author', None) if info else None
-            # Capturar advertencias y errores
             stderr_output = buf.getvalue()
             if stderr_output:
                 log_error(ruta_archivo, f"PyPDF2 stderr: {stderr_output}")
@@ -86,7 +78,6 @@ def process_epub(ruta_archivo):
                         break
             authors = libro.get_metadata('DC', 'creator')
             author = authors[0][0] if authors else None
-        # Capturar advertencias
         for warning in w:
             log_error(ruta_archivo, f"EPUB warning: {warning.message}")
         return clean_text(texto), author
@@ -105,7 +96,6 @@ def process_docx(ruta_archivo):
                 texto += documento.paragraphs[i].text + '\n'
             core_properties = documento.core_properties
             author = core_properties.author
-        # Capturar advertencias
         for warning in w:
             log_error(ruta_archivo, f"DOCX warning: {warning.message}")
         return clean_text(texto), author
