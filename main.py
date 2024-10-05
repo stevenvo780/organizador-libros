@@ -12,7 +12,7 @@ from utils import log_data, log_error, cargar_archivos, contar_archivos
 
 load_dotenv()
 
-CARPETA_ENTRADA = 'Libros'
+CARPETA_ENTRADA = '/mnt/FASTDATA/LibrosBiblioteca'
 CARPETA_SALIDA = 'Libros_Organizados'
 LOG_FILE = 'errores_procesamiento.json'
 MAX_WORKERS = os.cpu_count()
@@ -48,10 +48,8 @@ def procesar_archivos(cola_archivos, cola_analisis, total_archivos):
 
                 if len(textos_para_procesar) > 0:
                     cola_analisis.put((textos_para_procesar, autores_extraidos, rutas_archivos))
-                else:
-                    print("Batch vacío, no se extraerá nada.")
-            
-            print("Proceso de extracción de textos finalizado.")
+
+            log_error("Proceso de extracción de textos finalizado.")
 
 def analizar_autores(cola_analisis, cola_organizacion, total_archivos):
     with tqdm(total=total_archivos, desc="Analizando autores", unit="archivo") as pbar:
@@ -63,8 +61,6 @@ def analizar_autores(cola_analisis, cola_organizacion, total_archivos):
 
             textos_para_procesar, autores_extraidos, rutas_archivos = batch_data
 
-            print(f"Analizando batch con {len(rutas_archivos)} archivos.")
-
             batch_autores = list(map(
                 lambda x: extract_authors_batch(*x, BATCH_SIZE), 
                 zip(textos_para_procesar, autores_extraidos, rutas_archivos)
@@ -73,7 +69,7 @@ def analizar_autores(cola_analisis, cola_organizacion, total_archivos):
             cola_organizacion.put((rutas_archivos, batch_autores))
             pbar.update(len(rutas_archivos))
             
-        print("Proceso de análisis de autores finalizado.")
+        log_error("Proceso de análisis de autores finalizado.")
 
 def organizar_archivos(cola_organizacion, known_authors, total_archivos):
     with ProcessPoolExecutor(max_workers=MAX_WORKERS) as executor:
@@ -84,7 +80,6 @@ def organizar_archivos(cola_organizacion, known_authors, total_archivos):
                     break
 
                 rutas_archivos, batch_autores = batch_data
-                print(f"Organizando batch de {len(rutas_archivos)} archivos.")
                 futuros = [executor.submit(organize_file, ruta_archivo, author, known_authors)
                            for ruta_archivo, author in zip(rutas_archivos, batch_autores)]
 
@@ -95,7 +90,7 @@ def organizar_archivos(cola_organizacion, known_authors, total_archivos):
                         log_error(rutas_archivos, str(e))
                     pbar.update(1)
                 
-        print("Proceso de organización finalizado.")
+        log_error("Proceso de organización finalizado.")
 
 def main():
     if not os.path.exists(CARPETA_SALIDA):
@@ -112,7 +107,6 @@ def main():
     thread_cargar.start()
 
     total_archivos = contar_archivos(CARPETA_ENTRADA)
-    print(f"Total de archivos a procesar: {total_archivos}")
 
     thread_procesar = Thread(target=procesar_archivos, args=(cola_archivos, cola_analisis, total_archivos))
     thread_analizar = Thread(target=analizar_autores, args=(cola_analisis, cola_organizacion, total_archivos))
@@ -135,7 +129,7 @@ def main():
     with open(LOG_FILE, 'w', encoding='utf-8') as log_file:
         json.dump(log_data, log_file, indent=4, ensure_ascii=False)
 
-    print("Procesamiento terminado.")
+    log_error("Procesamiento terminado.")
 
 if __name__ == '__main__':
     main()
