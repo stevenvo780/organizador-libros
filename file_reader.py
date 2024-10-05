@@ -32,18 +32,6 @@ def fragment_text(text, max_characters=MAX_CHARACTERS):
     ]
     return fragmentos
 
-def verificar_autor(respuesta):
-    if len(respuesta.split()) < 2:
-        return False
-    return True
-
-def filtrar_candidatos_per(entidades):
-    candidatos = []
-    for entidad in entidades:
-        if len(entidad.split()) >= 2:
-            candidatos.append(entidad)
-    return candidatos
-
 def extract_metadata_default(ruta_archivo):
     filename = os.path.basename(ruta_archivo)
     return "", "", filename
@@ -53,7 +41,7 @@ def extract_metadata_pdf(documento, ruta_archivo):
     autor = metadata.get("author", "")
     titulo = metadata.get("title", "")
     filename = os.path.basename(ruta_archivo)
-    return autor, titulo, filename
+    return autor, titulo, filename  # Return all metadata
 
 def extract_metadata_epub(libro, ruta_archivo):
     titulo = ''
@@ -65,14 +53,14 @@ def extract_metadata_epub(libro, ruta_archivo):
     if autor_meta:
         autor = autor_meta[0][0]
     filename = os.path.basename(ruta_archivo)
-    return autor, titulo, filename
+    return autor, titulo, filename  # Return all metadata
 
 def extract_metadata_docx(documento, ruta_archivo):
     core_properties = documento.core_properties
     autor = core_properties.author or ''
     titulo = core_properties.title or ''
     filename = os.path.basename(ruta_archivo)
-    return autor, titulo, filename
+    return autor, titulo, filename  # Return all metadata
 
 def extract_images_from_pdf(documento):
     texto_extraido = ""
@@ -108,7 +96,7 @@ def process_pdf(ruta_archivo):
         texto_imagenes = extract_images_from_pdf(documento)
         texto += texto_imagenes
         if texto.strip():
-            return clean_text(texto), (autor or titulo or filename)
+            return clean_text(texto), (autor, titulo, filename)  # Return all metadata
     except Exception as e:
         log_error(ruta_archivo, f"Error processing PDF with PyMuPDF: {e}")
 
@@ -122,7 +110,7 @@ def process_pdf(ruta_archivo):
             if texto_pagina:
                 texto += texto_pagina + '\n'
         if texto.strip():
-            return clean_text(texto), extract_metadata_default(ruta_archivo)
+            return clean_text(texto), extract_metadata_default(ruta_archivo)  # Return all metadata
     except Exception as e:
         log_error(ruta_archivo, f"Error processing PDF with PyPDF2: {e}")
 
@@ -143,7 +131,7 @@ def process_epub(ruta_archivo):
                     conteo += 1
                     if conteo >= MAX_EPUB_ITEMS:
                         break
-        return clean_text(texto), extract_metadata_epub(libro, ruta_archivo)
+        return clean_text(texto), extract_metadata_epub(libro, ruta_archivo)  # Return all metadata
     except Exception as e:
         log_error(ruta_archivo, f"Error processing EPUB: {e}")
         return None, None
@@ -155,7 +143,7 @@ def process_docx(ruta_archivo):
         num_parrafos = min(MAX_PAGES * MAX_PARAGRAPHS_PER_PAGE, len(documento.paragraphs))
         for i in range(num_parrafos):
             texto += documento.paragraphs[i].text + '\n'
-        return clean_text(texto), extract_metadata_docx(documento, ruta_archivo)
+        return clean_text(texto), extract_metadata_docx(documento, ruta_archivo)  # Return all metadata
     except Exception as e:
         log_error(ruta_archivo, f"Error processing DOCX: {e}")
         return None, None
@@ -175,11 +163,6 @@ def process_rtf(ruta_archivo):
     except Exception as e:
         log_error(ruta_archivo, f"Error processing RTF: {e}")
         return None, None
-
-def verificar_autor_consistente(qa_resultado, ner_resultado):
-    if qa_resultado and ner_resultado:
-        return qa_resultado if verificar_autor(qa_resultado) else ner_resultado
-    return qa_resultado or ner_resultado
 
 def process_file(ruta_archivo, ext):
     if ext in FORMATOS_ARCHIVOS['pdf']:
