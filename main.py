@@ -12,7 +12,7 @@ from utils import log_data, log_error, cargar_archivos, contar_archivos, normali
 
 load_dotenv()
 
-CARPETA_ENTRADA = 'Libros'
+CARPETA_ENTRADA = '/mnt/FASTDATA/LibrosBiblioteca'
 CARPETA_SALIDA = 'Libros_Organizados'
 LOG_FILE = 'errores_procesamiento.json'
 MAX_WORKERS = os.cpu_count()
