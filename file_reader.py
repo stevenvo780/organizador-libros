@@ -1,13 +1,15 @@
+import os
+import io
+import re
+import warnings
+from contextlib import redirect_stderr
+
 import fitz
 from PyPDF2 import PdfReader
 from pdfminer.high_level import extract_text as pdfminer_extract_text
-import warnings
-import io
-import re
 import torch
 import easyocr
 from PIL import Image
-from contextlib import redirect_stderr
 import docx
 from ebooklib import epub
 import pypandoc
@@ -19,11 +21,35 @@ MAX_PARAGRAPHS_PER_PAGE = 30
 MAX_EPUB_ITEMS = 10
 reader = easyocr.Reader(['en'], gpu=torch.cuda.is_available())
 
-def extract_metadata(documento):
+def extract_metadata_default(ruta_archivo):
+    filename = os.path.basename(ruta_archivo)
+    return "", "", filename
+
+def extract_metadata_pdf(documento, ruta_archivo):
     metadata = documento.metadata
     autor = metadata.get("author", "")
     titulo = metadata.get("title", "")
-    return autor, titulo
+    filename = os.path.basename(ruta_archivo)
+    return autor, titulo, filename
+
+def extract_metadata_epub(libro, ruta_archivo):
+    titulo = ''
+    autor = ''
+    titulo_meta = libro.get_metadata('DC', 'title')
+    if titulo_meta:
+        titulo = titulo_meta[0][0]
+    autor_meta = libro.get_metadata('DC', 'creator')
+    if autor_meta:
+        autor = autor_meta[0][0]
+    filename = os.path.basename(ruta_archivo)
+    return autor, titulo, filename
+
+def extract_metadata_docx(documento, ruta_archivo):
+    core_properties = documento.core_properties
+    autor = core_properties.author or ''
+    titulo = core_properties.title or ''
+    filename = os.path.basename(ruta_archivo)
+    return autor, titulo, filename
 
 def extract_images_from_pdf(documento):
     texto_extraido = ""
@@ -48,7 +74,7 @@ def process_pdf(ruta_archivo):
             if stderr_output:
                 log_error(ruta_archivo, f"pdfminer.six stderr: {stderr_output}")
         if texto.strip():
-            return clean_text(texto), None
+            return clean_text(texto), extract_metadata_default(ruta_archivo)
     except Exception as e:
         log_error(ruta_archivo, f"Error processing PDF with pdfminer.six: {e}")
 
@@ -56,7 +82,7 @@ def process_pdf(ruta_archivo):
         with io.StringIO() as buf, redirect_stderr(buf):
             documento = fitz.open(ruta_archivo)
             texto = ""
-            autor, titulo = extract_metadata(documento)
+            autor, titulo, filename = extract_metadata_pdf(documento, ruta_archivo)
             for num_pagina in range(min(MAX_PAGES, len(documento))):
                 pagina = documento.load_page(num_pagina)
                 texto += pagina.get_text() + "\n"
@@ -66,7 +92,7 @@ def process_pdf(ruta_archivo):
             if stderr_output:
                 log_error(ruta_archivo, f"PyMuPDF stderr: {stderr_output}")
         if texto.strip():
-            return clean_text(texto), (autor or titulo)
+            return clean_text(texto), (autor or titulo or filename)
     except Exception as e:
         log_error(ruta_archivo, f"Error processing PDF with PyMuPDF: {e}")
 
@@ -84,7 +110,7 @@ def process_pdf(ruta_archivo):
             if stderr_output:
                 log_error(ruta_archivo, f"PyPDF2 stderr: {stderr_output}")
         if texto.strip():
-            return clean_text(texto), None
+            return clean_text(texto), extract_metadata_default(ruta_archivo)
     except Exception as e:
         log_error(ruta_archivo, f"Error processing PDF with PyPDF2: {e}")
 
@@ -112,7 +138,7 @@ def process_epub(ruta_archivo):
                     log_error(ruta_archivo, f"EPUB stderr: {stderr_output}")
                 for warning in w:
                     log_error(ruta_archivo, f"EPUB warning: {warning.message}")
-        return clean_text(texto), None
+        return clean_text(texto), extract_metadata_epub(libro, ruta_archivo)
     except Exception as e:
         log_error(ruta_archivo, f"Error processing EPUB: {e}")
         return None, None
@@ -132,7 +158,7 @@ def process_docx(ruta_archivo):
                     log_error(ruta_archivo, f"DOCX stderr: {stderr_output}")
                 for warning in w:
                     log_error(ruta_archivo, f"DOCX warning: {warning.message}")
-        return clean_text(texto), None
+        return clean_text(texto), extract_metadata_docx(documento, ruta_archivo)
     except Exception as e:
         log_error(ruta_archivo, f"Error processing DOCX: {e}")
         return None, None
@@ -144,7 +170,7 @@ def process_doc(ruta_archivo):
             stderr_output = buf.getvalue()
             if stderr_output:
                 log_error(ruta_archivo, f"DOC stderr: {stderr_output}")
-        return clean_text(texto), None
+        return clean_text(texto), extract_metadata_default(ruta_archivo)
     except Exception as e:
         log_error(ruta_archivo, f"Error processing DOC: {e}")
         return None, None
@@ -156,7 +182,7 @@ def process_rtf(ruta_archivo):
             stderr_output = buf.getvalue()
             if stderr_output:
                 log_error(ruta_archivo, f"RTF stderr: {stderr_output}")
-        return clean_text(texto), None
+        return clean_text(texto), extract_metadata_default(ruta_archivo)
     except Exception as e:
         log_error(ruta_archivo, f"Error processing RTF: {e}")
         return None, None
