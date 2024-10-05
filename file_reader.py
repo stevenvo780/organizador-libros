@@ -16,7 +16,7 @@ import pypandoc
 from utils import clean_text, log_error
 from file_types import FORMATOS_ARCHIVOS
 
-MAX_PAGES = 10
+MAX_PAGES = 20
 MAX_PARAGRAPHS_PER_PAGE = 30
 MAX_EPUB_ITEMS = 10
 MAX_CHARACTERS = 5000
