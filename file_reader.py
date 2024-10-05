@@ -2,11 +2,14 @@ import fitz
 from PyPDF2 import PdfReader
 from pdfminer.high_level import extract_text as pdfminer_extract_text
 import warnings
+import io
+import re
+import torch
+import easyocr
+from PIL import Image
+from contextlib import redirect_stderr
 import docx
 from ebooklib import epub
-import re
-import io
-from contextlib import redirect_stderr
 import pypandoc
 from utils import clean_text, log_error
 from file_types import FORMATOS_ARCHIVOS
@@ -14,6 +17,28 @@ from file_types import FORMATOS_ARCHIVOS
 MAX_PAGES = 10
 MAX_PARAGRAPHS_PER_PAGE = 30
 MAX_EPUB_ITEMS = 10
+reader = easyocr.Reader(['en'], gpu=torch.cuda.is_available())
+
+def extract_metadata(documento):
+    metadata = documento.metadata
+    autor = metadata.get("author", "")
+    titulo = metadata.get("title", "")
+    return autor, titulo
+
+def extract_images_from_pdf(documento):
+    texto_extraido = ""
+    for num_pagina in range(min(MAX_PAGES, len(documento))):
+        pagina = documento.load_page(num_pagina)
+        imagenes = pagina.get_images(full=True)
+        for img in imagenes:
+            xref = img[0]
+            base_imagen = documento.extract_image(xref)
+            imagen_bytes = base_imagen["image"]
+            imagen = Image.open(io.BytesIO(imagen_bytes))
+            ocr_resultado = reader.readtext(imagen)
+            for resultado in ocr_resultado:
+                texto_extraido += resultado[1] + "\n"
+    return texto_extraido
 
 def process_pdf(ruta_archivo):
     try:
@@ -29,40 +54,35 @@ def process_pdf(ruta_archivo):
 
     try:
         with io.StringIO() as buf, redirect_stderr(buf):
-            with warnings.catch_warnings(record=True) as w:
-                warnings.simplefilter("ignore")
-                documento = fitz.open(ruta_archivo)
-                texto = ""
-                for num_pagina in range(min(MAX_PAGES, len(documento))):
-                    pagina = documento.load_page(num_pagina)
-                    texto += pagina.get_text() + "\n"
-                stderr_output = buf.getvalue()
-                if stderr_output:
-                    log_error(ruta_archivo, f"PyMuPDF stderr: {stderr_output}")
-                for warning in w:
-                    log_error(ruta_archivo, f"PyMuPDF warning: {warning.message}")
+            documento = fitz.open(ruta_archivo)
+            texto = ""
+            autor, titulo = extract_metadata(documento)
+            for num_pagina in range(min(MAX_PAGES, len(documento))):
+                pagina = documento.load_page(num_pagina)
+                texto += pagina.get_text() + "\n"
+            texto_imagenes = extract_images_from_pdf(documento)
+            texto += texto_imagenes
+            stderr_output = buf.getvalue()
+            if stderr_output:
+                log_error(ruta_archivo, f"PyMuPDF stderr: {stderr_output}")
         if texto.strip():
-            return clean_text(texto), None
+            return clean_text(texto), (autor or titulo)
     except Exception as e:
         log_error(ruta_archivo, f"Error processing PDF with PyMuPDF: {e}")
 
     try:
         with io.StringIO() as buf, redirect_stderr(buf):
-            with warnings.catch_warnings(record=True) as w:
-                warnings.simplefilter("ignore")
-                lector = PdfReader(ruta_archivo)
-                num_paginas = min(MAX_PAGES, len(lector.pages))
-                texto = ''
-                for num_pagina in range(num_paginas):
-                    pagina = lector.pages[num_pagina]
-                    texto_pagina = pagina.extract_text()
-                    if texto_pagina:
-                        texto += texto_pagina + '\n'
-                stderr_output = buf.getvalue()
-                if stderr_output:
-                    log_error(ruta_archivo, f"PyPDF2 stderr: {stderr_output}")
-                for warning in w:
-                    log_error(ruta_archivo, f"PyPDF2 warning: {warning.message}")
+            lector = PdfReader(ruta_archivo)
+            num_paginas = min(MAX_PAGES, len(lector.pages))
+            texto = ''
+            for num_pagina in range(num_paginas):
+                pagina = lector.pages[num_pagina]
+                texto_pagina = pagina.extract_text()
+                if texto_pagina:
+                    texto += texto_pagina + '\n'
+            stderr_output = buf.getvalue()
+            if stderr_output:
+                log_error(ruta_archivo, f"PyPDF2 stderr: {stderr_output}")
         if texto.strip():
             return clean_text(texto), None
     except Exception as e:
