@@ -35,32 +35,36 @@ def extract_author_using_ner(text):
     return None
 
 def extract_authors_batch(text, author, ruta_archivo, metadata, batch_size):
-    if author:
-        log_error(ruta_archivo, "Author metadata already provided.")
-        return author
+    try:
+        if author:
+            log_error(ruta_archivo, "Author metadata already provided.")
+            return author
 
-    text = clean_input_text(text)
-    if len(text) < 100:
-        log_error(ruta_archivo, "Text too short for meaningful analysis.")
+        text = clean_input_text(text)
+        if len(text) < 100:
+            log_error(ruta_archivo, "Text too short for meaningful analysis.")
+            return None
+
+        context_with_metadata = f"Título: {metadata.get('title', '')}, Archivo: {metadata.get('filename', '')}\n\n{text}"
+
+        for question in QUESTIONS_AUTHOR_VARIATIONS:
+            qa_inputs = {'context': context_with_metadata, 'question': question}
+
+            try:
+                answer = tqa_pipeline(qa_inputs).get('answer', None)
+                if answer and answer.lower() not in RESPUESTA_IA_NO_ENCONTRADA:
+                    log_error(ruta_archivo, f"Answer found with question '{question}'")
+                    return answer
+            except Exception as e:
+                log_error(ruta_archivo, f"Error processing QA for question '{question}': {e}")
+
+        author_from_ner = extract_author_using_ner(text)
+        if author_from_ner:
+            log_error(ruta_archivo, "Author found using NER.")
+            return author_from_ner
+
+        log_error(ruta_archivo, "No se pudo determinar el autor.")
         return None
-
-    context_with_metadata = f"Título: {metadata['title']}, Archivo: {metadata['filename']}\n\n{text}"
-
-    for question in QUESTIONS_AUTHOR_VARIATIONS:
-        qa_inputs = {'context': context_with_metadata, 'question': question}
-
-        try:
-            answer = tqa_pipeline(qa_inputs, batch_size=batch_size).get('answer', None)
-            if answer and answer.lower() not in RESPUESTA_IA_NO_ENCONTRADA:
-                log_error(ruta_archivo, f"Answer found with question '{question}'")
-                return answer
-        except Exception as e:
-            log_error(ruta_archivo, f"Error processing QA for question '{question}': {e}")
-
-    author_from_ner = extract_author_using_ner(text)
-    if author_from_ner:
-        log_error(ruta_archivo, "Author found using NER.")
-        return author_from_ner
-
-    log_error(ruta_archivo, "No se pudo determinar el autor.")
-    return None
+    except Exception as e:
+        log_error(ruta_archivo, f"Exception in extract_authors_batch: {e}")
+        return None

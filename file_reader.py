@@ -34,14 +34,14 @@ def fragment_text(text, max_characters=MAX_CHARACTERS):
 
 def extract_metadata_default(ruta_archivo):
     filename = os.path.basename(ruta_archivo)
-    return "", "", filename
+    return {'author': '', 'title': '', 'filename': filename}
 
 def extract_metadata_pdf(documento, ruta_archivo):
     metadata = documento.metadata
     autor = metadata.get("author", "")
     titulo = metadata.get("title", "")
     filename = os.path.basename(ruta_archivo)
-    return autor, titulo, filename  # Return all metadata
+    return {'author': autor, 'title': titulo, 'filename': filename}
 
 def extract_metadata_epub(libro, ruta_archivo):
     titulo = ''
@@ -53,14 +53,14 @@ def extract_metadata_epub(libro, ruta_archivo):
     if autor_meta:
         autor = autor_meta[0][0]
     filename = os.path.basename(ruta_archivo)
-    return autor, titulo, filename  # Return all metadata
+    return {'author': autor, 'title': titulo, 'filename': filename}
 
 def extract_metadata_docx(documento, ruta_archivo):
     core_properties = documento.core_properties
     autor = core_properties.author or ''
     titulo = core_properties.title or ''
     filename = os.path.basename(ruta_archivo)
-    return autor, titulo, filename  # Return all metadata
+    return {'author': autor, 'title': titulo, 'filename': filename}
 
 def extract_images_from_pdf(documento):
     texto_extraido = ""
@@ -89,14 +89,14 @@ def process_pdf(ruta_archivo):
     try:
         documento = fitz.open(ruta_archivo)
         texto = ""
-        autor, titulo, filename = extract_metadata_pdf(documento, ruta_archivo)
+        metadata = extract_metadata_pdf(documento, ruta_archivo)
         for num_pagina in range(min(MAX_PAGES, len(documento))):
             pagina = documento.load_page(num_pagina)
             texto += pagina.get_text() + "\n"
         texto_imagenes = extract_images_from_pdf(documento)
         texto += texto_imagenes
         if texto.strip():
-            return clean_text(texto), (autor, titulo, filename)  # Return all metadata
+            return clean_text(texto), metadata
     except Exception as e:
         log_error(ruta_archivo, f"Error processing PDF with PyMuPDF: {e}")
 
@@ -110,7 +110,7 @@ def process_pdf(ruta_archivo):
             if texto_pagina:
                 texto += texto_pagina + '\n'
         if texto.strip():
-            return clean_text(texto), extract_metadata_default(ruta_archivo)  # Return all metadata
+            return clean_text(texto), extract_metadata_default(ruta_archivo)
     except Exception as e:
         log_error(ruta_archivo, f"Error processing PDF with PyPDF2: {e}")
 
@@ -131,7 +131,7 @@ def process_epub(ruta_archivo):
                     conteo += 1
                     if conteo >= MAX_EPUB_ITEMS:
                         break
-        return clean_text(texto), extract_metadata_epub(libro, ruta_archivo)  # Return all metadata
+        return clean_text(texto), extract_metadata_epub(libro, ruta_archivo)
     except Exception as e:
         log_error(ruta_archivo, f"Error processing EPUB: {e}")
         return None, None
@@ -143,7 +143,7 @@ def process_docx(ruta_archivo):
         num_parrafos = min(MAX_PAGES * MAX_PARAGRAPHS_PER_PAGE, len(documento.paragraphs))
         for i in range(num_parrafos):
             texto += documento.paragraphs[i].text + '\n'
-        return clean_text(texto), extract_metadata_docx(documento, ruta_archivo)  # Return all metadata
+        return clean_text(texto), extract_metadata_docx(documento, ruta_archivo)
     except Exception as e:
         log_error(ruta_archivo, f"Error processing DOCX: {e}")
         return None, None
