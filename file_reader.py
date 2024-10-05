@@ -19,7 +19,30 @@ from file_types import FORMATOS_ARCHIVOS
 MAX_PAGES = 10
 MAX_PARAGRAPHS_PER_PAGE = 30
 MAX_EPUB_ITEMS = 10
+MAX_CHARACTERS = 5000
 reader = easyocr.Reader(['en'], gpu=torch.cuda.is_available())
+
+def fragment_text(text, max_characters=MAX_CHARACTERS):
+    if len(text) <= max_characters:
+        return [text]
+    fragmentos = [
+        text[:max_characters],
+        text[len(text) // 2 : len(text) // 2 + max_characters],
+        text[-max_characters:],
+    ]
+    return fragmentos
+
+def verificar_autor(respuesta):
+    if len(respuesta.split()) < 2:
+        return False
+    return True
+
+def filtrar_candidatos_per(entidades):
+    candidatos = []
+    for entidad in entidades:
+        if len(entidad.split()) >= 2:
+            candidatos.append(entidad)
+    return candidatos
 
 def extract_metadata_default(ruta_archivo):
     filename = os.path.basename(ruta_archivo)
@@ -70,45 +93,34 @@ def process_pdf(ruta_archivo):
     try:
         with io.StringIO() as buf, redirect_stderr(buf):
             texto = pdfminer_extract_text(ruta_archivo, maxpages=MAX_PAGES)
-            stderr_output = buf.getvalue()
-            if stderr_output:
-                log_error(ruta_archivo, f"pdfminer.six stderr: {stderr_output}")
-        if texto.strip():
-            return clean_text(texto), extract_metadata_default(ruta_archivo)
+            if texto.strip():
+                return clean_text(texto), extract_metadata_default(ruta_archivo)
     except Exception as e:
         log_error(ruta_archivo, f"Error processing PDF with pdfminer.six: {e}")
 
     try:
-        with io.StringIO() as buf, redirect_stderr(buf):
-            documento = fitz.open(ruta_archivo)
-            texto = ""
-            autor, titulo, filename = extract_metadata_pdf(documento, ruta_archivo)
-            for num_pagina in range(min(MAX_PAGES, len(documento))):
-                pagina = documento.load_page(num_pagina)
-                texto += pagina.get_text() + "\n"
-            texto_imagenes = extract_images_from_pdf(documento)
-            texto += texto_imagenes
-            stderr_output = buf.getvalue()
-            if stderr_output:
-                log_error(ruta_archivo, f"PyMuPDF stderr: {stderr_output}")
+        documento = fitz.open(ruta_archivo)
+        texto = ""
+        autor, titulo, filename = extract_metadata_pdf(documento, ruta_archivo)
+        for num_pagina in range(min(MAX_PAGES, len(documento))):
+            pagina = documento.load_page(num_pagina)
+            texto += pagina.get_text() + "\n"
+        texto_imagenes = extract_images_from_pdf(documento)
+        texto += texto_imagenes
         if texto.strip():
             return clean_text(texto), (autor or titulo or filename)
     except Exception as e:
         log_error(ruta_archivo, f"Error processing PDF with PyMuPDF: {e}")
 
     try:
-        with io.StringIO() as buf, redirect_stderr(buf):
-            lector = PdfReader(ruta_archivo)
-            num_paginas = min(MAX_PAGES, len(lector.pages))
-            texto = ''
-            for num_pagina in range(num_paginas):
-                pagina = lector.pages[num_pagina]
-                texto_pagina = pagina.extract_text()
-                if texto_pagina:
-                    texto += texto_pagina + '\n'
-            stderr_output = buf.getvalue()
-            if stderr_output:
-                log_error(ruta_archivo, f"PyPDF2 stderr: {stderr_output}")
+        lector = PdfReader(ruta_archivo)
+        num_paginas = min(MAX_PAGES, len(lector.pages))
+        texto = ''
+        for num_pagina in range(num_paginas):
+            pagina = lector.pages[num_pagina]
+            texto_pagina = pagina.extract_text()
+            if texto_pagina:
+                texto += texto_pagina + '\n'
         if texto.strip():
             return clean_text(texto), extract_metadata_default(ruta_archivo)
     except Exception as e:
@@ -120,24 +132,17 @@ def process_pdf(ruta_archivo):
 def process_epub(ruta_archivo):
     try:
         with io.StringIO() as buf, redirect_stderr(buf):
-            with warnings.catch_warnings(record=True) as w:
-                warnings.simplefilter("always")
-                libro = epub.read_epub(ruta_archivo)
-                texto = ''
-                conteo = 0
-                for item in libro.get_items():
-                    if item.get_type() == epub.EpubHtml:
-                        contenido = item.get_content().decode('utf-8', errors='ignore')
-                        contenido = re.sub(r'<[^>]+>', '', contenido)
-                        texto += contenido + '\n'
-                        conteo += 1
-                        if conteo >= MAX_EPUB_ITEMS:
-                            break
-                stderr_output = buf.getvalue()
-                if stderr_output:
-                    log_error(ruta_archivo, f"EPUB stderr: {stderr_output}")
-                for warning in w:
-                    log_error(ruta_archivo, f"EPUB warning: {warning.message}")
+            libro = epub.read_epub(ruta_archivo)
+            texto = ''
+            conteo = 0
+            for item in libro.get_items():
+                if item.get_type() == epub.EpubHtml:
+                    contenido = item.get_content().decode('utf-8', errors='ignore')
+                    contenido = re.sub(r'<[^>]+>', '', contenido)
+                    texto += contenido + '\n'
+                    conteo += 1
+                    if conteo >= MAX_EPUB_ITEMS:
+                        break
         return clean_text(texto), extract_metadata_epub(libro, ruta_archivo)
     except Exception as e:
         log_error(ruta_archivo, f"Error processing EPUB: {e}")
@@ -145,19 +150,11 @@ def process_epub(ruta_archivo):
 
 def process_docx(ruta_archivo):
     try:
-        with io.StringIO() as buf, redirect_stderr(buf):
-            with warnings.catch_warnings(record=True) as w:
-                warnings.simplefilter("always")
-                documento = docx.Document(ruta_archivo)
-                texto = ''
-                num_parrafos = min(MAX_PAGES * MAX_PARAGRAPHS_PER_PAGE, len(documento.paragraphs))
-                for i in range(num_parrafos):
-                    texto += documento.paragraphs[i].text + '\n'
-                stderr_output = buf.getvalue()
-                if stderr_output:
-                    log_error(ruta_archivo, f"DOCX stderr: {stderr_output}")
-                for warning in w:
-                    log_error(ruta_archivo, f"DOCX warning: {warning.message}")
+        documento = docx.Document(ruta_archivo)
+        texto = ''
+        num_parrafos = min(MAX_PAGES * MAX_PARAGRAPHS_PER_PAGE, len(documento.paragraphs))
+        for i in range(num_parrafos):
+            texto += documento.paragraphs[i].text + '\n'
         return clean_text(texto), extract_metadata_docx(documento, ruta_archivo)
     except Exception as e:
         log_error(ruta_archivo, f"Error processing DOCX: {e}")
@@ -165,11 +162,7 @@ def process_docx(ruta_archivo):
 
 def process_doc(ruta_archivo):
     try:
-        with io.StringIO() as buf, redirect_stderr(buf):
-            texto = pypandoc.convert_file(ruta_archivo, 'plain', format='doc')
-            stderr_output = buf.getvalue()
-            if stderr_output:
-                log_error(ruta_archivo, f"DOC stderr: {stderr_output}")
+        texto = pypandoc.convert_file(ruta_archivo, 'plain', format='doc')
         return clean_text(texto), extract_metadata_default(ruta_archivo)
     except Exception as e:
         log_error(ruta_archivo, f"Error processing DOC: {e}")
@@ -177,15 +170,16 @@ def process_doc(ruta_archivo):
 
 def process_rtf(ruta_archivo):
     try:
-        with io.StringIO() as buf, redirect_stderr(buf):
-            texto = pypandoc.convert_file(ruta_archivo, 'plain', format='rtf')
-            stderr_output = buf.getvalue()
-            if stderr_output:
-                log_error(ruta_archivo, f"RTF stderr: {stderr_output}")
+        texto = pypandoc.convert_file(ruta_archivo, 'plain', format='rtf')
         return clean_text(texto), extract_metadata_default(ruta_archivo)
     except Exception as e:
         log_error(ruta_archivo, f"Error processing RTF: {e}")
         return None, None
+
+def verificar_autor_consistente(qa_resultado, ner_resultado):
+    if qa_resultado and ner_resultado:
+        return qa_resultado if verificar_autor(qa_resultado) else ner_resultado
+    return qa_resultado or ner_resultado
 
 def process_file(ruta_archivo, ext):
     if ext in FORMATOS_ARCHIVOS['pdf']:
