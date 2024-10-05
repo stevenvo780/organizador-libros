@@ -68,3 +68,8 @@ def contar_archivos(CARPETA_ENTRADA):
                 if any(ext in formatos for formatos in FORMATOS_ARCHIVOS.values()):
                     total_archivos += 1
     return total_archivos
+
+def clean_input_text(text):
+    text = re.sub(r'\s+', ' ', text).strip()  # Eliminar espacios en blanco excesivos
+    text = re.sub(r'[^\x00-\x7F]+', ' ', text)  # Eliminar caracteres no ASCII (opcionales)
+    return text[:MAX_CHARACTERS]  # Limitar la longitud del texto

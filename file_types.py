@@ -28,3 +28,11 @@ RESPUESTA_IA_NO_ENCONTRADA = [
     'no answer to that question',
     'no answer to that one',
 ]
+
+QUESTIONS_AUTHOR_VARIATIONS = [
+    "¿Quién es el autor del libro?",
+    "¿Quién escribió este libro?",
+    "¿Quién es el creador del texto?",
+    "¿De quién es este libro?",
+    "¿Cuál es el autor de este documento?",
+]

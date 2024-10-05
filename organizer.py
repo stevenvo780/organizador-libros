@@ -8,6 +8,9 @@ CARPETA_SALIDA = 'Libros_Organizados'
 def organize_file(ruta_archivo, author, known_authors):
     nombre_archivo = os.path.basename(ruta_archivo)
     try:
+        if not isinstance(author, str):
+            author = str(author)
+
         nombre_autor = 'Autor Desconocido' if not author or author.lower() in ['no answer', 'no sé', ''] else normalize_author_name(author)
         nombre_autor = get_best_matching_author(nombre_autor, known_authors)
         nombre_autor = re.sub(r'[<>:"/\\|?*]', '', nombre_autor)
