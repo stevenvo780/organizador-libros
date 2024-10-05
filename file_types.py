@@ -30,9 +30,9 @@ RESPUESTA_IA_NO_ENCONTRADA = [
 ]
 
 QUESTIONS_AUTHOR_VARIATIONS = [
-    "¿Quién es el autor del libro?",
-    "¿Quién escribió este libro?",
-    "¿Quién es el creador del texto?",
-    "¿De quién es este libro?",
-    "¿Cuál es el autor de este documento?",
+    "¿Cuál es el nombre completo del autor del libro?",
+    "¿Quién es el autor completo que escribió este libro?",
+    "¿Cuál es el nombre completo del creador de este texto?",
+    "¿De quién es este libro, incluyendo su nombre completo?",
+    "¿Cuál es el nombre completo del autor de este documento?",
 ]
